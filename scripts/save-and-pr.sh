@@ -13,7 +13,10 @@ URL="${1:?Usage: save-and-pr.sh <URL>}"
 OUTDIR="/tmp/collect"
 TARGET_REPO="${TARGET_REPO:?TARGET_REPO env var required}"
 TARGET_DIR="${TARGET_DIR:-/tmp/target-repo}"
-SAVE_PATH_TEMPLATE="${SAVE_PATH_TEMPLATE:-articles/\${TYPE}/}"
+if [ -z "${SAVE_PATH_TEMPLATE:-}" ]; then
+  # shellcheck disable=SC2016
+  SAVE_PATH_TEMPLATE='articles/${TYPE}/'
+fi
 AUTO_MERGE="${AUTO_MERGE:-true}"
 NOW=$(date +%Y-%m-%d)
 BRANCH="collect/$(date +%Y-%m-%d-%H%M%S)"
