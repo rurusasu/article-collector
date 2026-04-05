@@ -1,0 +1,54 @@
+version: "3"
+
+vars:
+  SCRIPTS_DIR: '{{.TASKFILE_DIR}}/scripts'
+
+tasks:
+  collect:
+    desc: "記事取得 → 翻訳 → 保存 → PR"
+    requires:
+      vars: [URL]
+    preconditions:
+      - sh: command -v curl
+        msg: "curl is required"
+      - sh: command -v jq
+        msg: "jq is required"
+      - sh: command -v python3
+        msg: "python3 is required"
+      - sh: command -v git
+        msg: "git is required"
+      - sh: command -v gh
+        msg: "gh CLI is required"
+    cmds:
+      - task: fetch
+      - task: translate
+      - task: save-and-pr
+
+  fetch:
+    desc: "URL から記事を取得"
+    requires:
+      vars: [URL]
+    cmds:
+      - bash {{.SCRIPTS_DIR}}/fetch-article.sh "{{.URL}}"
+
+  translate:
+    desc: "取得した記事を翻訳"
+    cmds:
+      - bash {{.SCRIPTS_DIR}}/translate.sh /tmp/collect/raw.json
+
+  save-and-pr:
+    desc: "翻訳記事を保存して PR 作成"
+    requires:
+      vars: [URL]
+    cmds:
+      - bash {{.SCRIPTS_DIR}}/save-and-pr.sh "{{.URL}}"
+
+  lint:
+    desc: "shellcheck でスクリプトを検証"
+    cmds:
+      - shellcheck scripts/*.sh
+
+  test:
+    desc: "bats でユニットテストを実行"
+    cmds:
+      - bats tests/
