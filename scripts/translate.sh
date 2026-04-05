@@ -9,6 +9,7 @@ set -euo pipefail
 
 INPUT="${1:?Usage: translate.sh <input.json>}"
 OUTDIR="/tmp/collect"
+mkdir -p "$OUTDIR"
 LLM_API_URL="${LLM_API_URL:?LLM_API_URL env var required}"
 LLM_API_TOKEN="${LLM_API_TOKEN:?LLM_API_TOKEN env var required}"
 LLM_MODEL="${LLM_MODEL:-gpt-4o}"
