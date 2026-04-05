@@ -30,10 +30,21 @@ if ! command -v shellcheck &>/dev/null; then
   apt-get update -qq && apt-get install -y -qq shellcheck
 fi
 
-# go-task (task runner)
+# go-task (task runner) - use snap or apt; curl to taskfile.dev is blocked by proxy
 if ! command -v task &>/dev/null; then
   echo "[setup] installing go-task..."
-  sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+  if command -v snap &>/dev/null; then
+    snap install task --classic 2>/dev/null || true
+  fi
+  if ! command -v task &>/dev/null; then
+    apt-get update -qq && apt-get install -y -qq task-spooler 2>/dev/null || true
+    # Fallback: download binary from GitHub releases directly
+    TASK_VERSION="3.40.1"
+    curl -sSL "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" -o /tmp/task.tar.gz \
+      && tar -xzf /tmp/task.tar.gz -C /usr/local/bin task \
+      && rm /tmp/task.tar.gz \
+      || echo "[setup] WARNING: go-task installation failed"
+  fi
 fi
 
 # Python3 (should be pre-installed, but verify)
