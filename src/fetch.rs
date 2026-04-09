@@ -263,7 +263,7 @@ async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
         .unwrap_or_else(|| "untitled".to_string());
 
     // Remove script/style tags, then all HTML tags
-    let script_re = Regex::new(r"(?is)<(script|style)[^>]*>.*?</\1>")?;
+    let script_re = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>")?;
     let body = script_re.replace_all(&html, "");
     let tag_re = Regex::new(r"<[^>]+>")?;
     let body = tag_re.replace_all(&body, " ");
@@ -321,10 +321,7 @@ mod tests {
 
     #[test]
     fn routes_devto_url() {
-        assert_eq!(
-            classify_url("https://dev.to/author/slug"),
-            Route::DevTo
-        );
+        assert_eq!(classify_url("https://dev.to/author/slug"), Route::DevTo);
     }
 
     #[test]
@@ -337,10 +334,7 @@ mod tests {
 
     #[test]
     fn routes_youtu_be_url() {
-        assert_eq!(
-            classify_url("https://youtu.be/abc123"),
-            Route::YouTube
-        );
+        assert_eq!(classify_url("https://youtu.be/abc123"), Route::YouTube);
     }
 
     #[test]
@@ -361,10 +355,7 @@ mod tests {
 
     #[test]
     fn routes_unknown_url_to_generic() {
-        assert_eq!(
-            classify_url("https://example.com/article"),
-            Route::Generic
-        );
+        assert_eq!(classify_url("https://example.com/article"), Route::Generic);
     }
 
     // ── ID / slug extraction ──

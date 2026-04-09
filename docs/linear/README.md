@@ -10,7 +10,13 @@ Follow the rules below when creating issues.
 | Item | Value |
 |------|-------|
 | Team | `Life-style-base` (LIF) |
-| Project | `ContentsForge` |
+
+### Projects
+
+| Project | Repository | Description |
+|---------|-----------|-------------|
+| `ArticleCollector` | `article-collector` | Rust製記事収集パイプライン CLI |
+| `ContentsForge` | `contentsforge` | ComfyUI 画像生成管理ツール |
 
 ## Issue Template
 
@@ -64,7 +70,7 @@ List changes by category using bullet points.
 mcp__claude_ai_Linear__save_issue:
   title: "Issue title"
   team: "Life-style-base"
-  project: "ContentsForge"
+  project: "ArticleCollector"
   description: |
     ## Overview
     ...
@@ -78,6 +84,6 @@ mcp__claude_ai_Linear__save_issue:
 
 ## Notes
 
-- Always associate issues with the `ContentsForge` project
+- Always associate issues with the appropriate project (this repo uses `ArticleCollector`)
 - Include the branch name in the issue description
 - Organize changes by category

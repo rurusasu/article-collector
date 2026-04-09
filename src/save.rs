@@ -32,13 +32,11 @@ pub fn save_and_pr(url: &str) -> Result<()> {
     let title = if let Some(arr) = data.as_array() {
         arr.first()
             .and_then(|item| {
-                item.get("title")
-                    .and_then(|t| t.as_str())
-                    .or_else(|| {
-                        item.get("text")
-                            .and_then(|t| t.as_str())
-                            .map(|s| &s[..s.len().min(80)])
-                    })
+                item.get("title").and_then(|t| t.as_str()).or_else(|| {
+                    item.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| &s[..s.len().min(80)])
+                })
             })
             .unwrap_or("untitled")
     } else {
@@ -104,16 +102,17 @@ pub fn save_and_pr(url: &str) -> Result<()> {
     run_git(&target_dir, &["commit", "-m", &format!("collect: {title}")])?;
     run_git(&target_dir, &["push", "-u", "origin", &branch])?;
 
-    let pr_body = format!(
-        "## Collected Article\n\n- `{rel_path}` — {title}\n\nSource: {url}"
-    );
+    let pr_body = format!("## Collected Article\n\n- `{rel_path}` — {title}\n\nSource: {url}");
     run_cmd_in(
         &target_dir,
         "gh",
         &[
-            "pr", "create",
-            "--title", &format!("collect: {now} {title}"),
-            "--body", &pr_body,
+            "pr",
+            "create",
+            "--title",
+            &format!("collect: {now} {title}"),
+            "--body",
+            &pr_body,
         ],
     )?;
 
@@ -152,7 +151,10 @@ pub fn determine_type(url: &str) -> String {
         "x".to_string()
     } else if url.contains("youtube.com/") || url.contains("youtu.be/") {
         "youtube".to_string()
-    } else if url.contains("arxiv.org/") || url.contains("doi.org/") || url.contains("openreview.net/") {
+    } else if url.contains("arxiv.org/")
+        || url.contains("doi.org/")
+        || url.contains("openreview.net/")
+    {
         "paper".to_string()
     } else {
         "web".to_string()
@@ -206,7 +208,10 @@ mod tests {
 
     #[test]
     fn type_youtube_com() {
-        assert_eq!(determine_type("https://www.youtube.com/watch?v=abc"), "youtube");
+        assert_eq!(
+            determine_type("https://www.youtube.com/watch?v=abc"),
+            "youtube"
+        );
     }
 
     #[test]
@@ -226,7 +231,10 @@ mod tests {
 
     #[test]
     fn type_openreview() {
-        assert_eq!(determine_type("https://openreview.net/forum?id=abc"), "paper");
+        assert_eq!(
+            determine_type("https://openreview.net/forum?id=abc"),
+            "paper"
+        );
     }
 
     #[test]
@@ -243,7 +251,10 @@ mod tests {
 
     #[test]
     fn sanitize_escapes_double_quotes() {
-        assert_eq!(sanitize_title("Title \"with\" quotes"), "Title \\\"with\\\" quotes");
+        assert_eq!(
+            sanitize_title("Title \"with\" quotes"),
+            "Title \\\"with\\\" quotes"
+        );
     }
 
     #[test]
