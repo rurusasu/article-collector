@@ -26,6 +26,9 @@ cargo fetch
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 git config --global include.path "${REPO_ROOT}/.github/.gitconfig"
 
+# Git hooks: use project hooks for commit-msg validation (repo-local only)
+git -C "${REPO_ROOT}" config core.hooksPath "${REPO_ROOT}/.githooks"
+
 echo ""
 echo "[devcontainer] Run the following to complete git setup:"
 echo "  gh auth login"

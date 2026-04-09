@@ -1,0 +1,39 @@
+#!/bin/bash
+# Validate Conventional Commits format
+# https://www.conventionalcommits.org/
+#
+# Valid: feat: add new feature
+#        fix(scope): resolve bug
+#        feat!: breaking change
+#        chore: update deps
+
+commit_msg_file="$1"
+commit_msg=$(head -1 "$commit_msg_file")
+
+# Allow merge commits and revert commits
+if echo "$commit_msg" | grep -qE '^(Merge|Revert) '; then
+  exit 0
+fi
+
+# Conventional Commits pattern
+# type(optional scope)optional !: description
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9_-]+\))?!?: .+'
+
+if ! echo "$commit_msg" | grep -qE "$pattern"; then
+  echo ""
+  echo "ERROR: Commit message does not follow Conventional Commits format."
+  echo ""
+  echo "  Format: <type>(<scope>): <description>"
+  echo ""
+  echo "  Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert"
+  echo ""
+  echo "  Examples:"
+  echo "    feat: add user authentication"
+  echo "    fix(parser): handle empty input"
+  echo "    docs: update API reference"
+  echo "    feat!: redesign API (breaking change)"
+  echo ""
+  echo "  Your message: $commit_msg"
+  echo ""
+  exit 1
+fi

@@ -39,6 +39,9 @@ jobs:
       - name: Run unit tests
         run: cargo test --locked
 
+      - name: Verify release build
+        run: cargo build --release --locked
+
   shell-lint:
     name: Shell Lint & Test
     runs-on: ubuntu-latest
