@@ -1,0 +1,18 @@
+[alias]
+    co = checkout
+    st = status
+    br = branch
+    lg = log --oneline --graph --decorate
+
+[core]
+    autocrlf = input
+    editor = code --wait
+
+[pull]
+    rebase = true
+
+[init]
+    defaultBranch = main
+
+[include]
+    path = ~/.gitconfig.local

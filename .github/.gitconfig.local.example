@@ -1,0 +1,9 @@
+# Copy this file to ~/.gitconfig.local and fill in your values.
+# This file should NOT be committed to any repository.
+
+[user]
+    name = your-name
+    email = your-email
+
+[credential "https://github.com"]
+    helper = !/usr/bin/gh auth git-credential
