@@ -75,8 +75,12 @@ The **security-guidance** plugin runs automatically as a `PreToolUse` hook durin
 
 ### Step 3: Checklist Verification
 
-Verify **all** items listed in the PR description's `Test plan` locally.
+Verify **all** items listed in the PR description's `Test plan` **locally on the current machine**.
 
+> **重要:** チェックリストの検証は必ず **すべての修正（Step 1〜2 の fix commit）が完了した後** に実施すること。
+> 修正前や修正途中の状態で検証しても、修正による副作用やリグレッションを検出できない。
+
+- 各項目を実際にコマンド実行・動作確認して検証する（目視や推測で通過させない）
 - If all items pass, update the PR description (check the boxes)
 - If any item fails, fix and re-verify
 
