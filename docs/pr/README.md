@@ -81,11 +81,12 @@ Verify **all** items listed in the PR description's `Test plan` **locally on the
 > 修正前や修正途中の状態で検証しても、修正による副作用やリグレッションを検出できない。
 
 - 各項目を実際にコマンド実行・動作確認して検証する（目視や推測で通過させない）
-- If all items pass, update the PR description (check the boxes)
+- If all items pass, **immediately** update the PR description (check the boxes via `gh pr edit`)
 - If any item fails, fix and re-verify
+- **検証と PR description の更新は必ずセットで行うこと。** 検証だけ行って更新を忘れると、PR の状態が実際の検証結果と乖離する
 
 ```bash
-# Update PR description
+# 検証通過後、必ず PR description を更新する
 gh pr edit <PR_NUMBER> --body "..."
 ```
 
