@@ -262,9 +262,11 @@ async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
         .map(|m| html_escape::decode_html_entities(m.as_str().trim()).to_string())
         .unwrap_or_else(|| "untitled".to_string());
 
-    // Remove script/style tags, then all HTML tags
-    let script_re = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>")?;
+    // Remove script/style tags separately to avoid cross-tag mismatch
+    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")?;
     let body = script_re.replace_all(&html, "");
+    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")?;
+    let body = style_re.replace_all(&body, "");
     let tag_re = Regex::new(r"<[^>]+>")?;
     let body = tag_re.replace_all(&body, " ");
     let ws_re = Regex::new(r"\s+")?;
