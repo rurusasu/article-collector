@@ -24,8 +24,7 @@ pub fn detect_provider(api_url: &str) -> LlmProvider {
 }
 
 pub async fn translate(input: &Path) -> Result<()> {
-    let api_url = std::env::var("LLM_API_URL")
-        .unwrap_or_else(|_| "claude-code".to_string());
+    let api_url = std::env::var("LLM_API_URL").unwrap_or_else(|_| "claude-code".to_string());
     let provider = detect_provider(&api_url);
     let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
 
@@ -83,14 +82,13 @@ async fn translate_text(
     match provider {
         LlmProvider::ClaudeCode => call_claude_code(&prompt),
         LlmProvider::Anthropic | LlmProvider::OpenAI => {
-            let api_token = std::env::var("LLM_API_TOKEN")
-                .context("LLM_API_TOKEN env var required")?;
+            let api_token =
+                std::env::var("LLM_API_TOKEN").context("LLM_API_TOKEN env var required")?;
             let default_model = match provider {
                 LlmProvider::Anthropic => "claude-sonnet-4-20250514",
                 _ => "gpt-4o",
             };
-            let model = std::env::var("LLM_MODEL")
-                .unwrap_or_else(|_| default_model.to_string());
+            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| default_model.to_string());
             let endpoint = resolve_endpoint(api_url, provider);
             let client = reqwest::Client::new();
             call_llm_api(&client, &endpoint, &api_token, &model, &prompt, provider).await
@@ -244,16 +242,14 @@ async fn call_llm_api(
     };
 
     let translated = match provider {
-        LlmProvider::Anthropic => {
-            resp.pointer("/content/0/text")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-        }
-        LlmProvider::OpenAI => {
-            resp.pointer("/choices/0/message/content")
-                .and_then(|c| c.as_str())
-                .unwrap_or("")
-        }
+        LlmProvider::Anthropic => resp
+            .pointer("/content/0/text")
+            .and_then(|c| c.as_str())
+            .unwrap_or(""),
+        LlmProvider::OpenAI => resp
+            .pointer("/choices/0/message/content")
+            .and_then(|c| c.as_str())
+            .unwrap_or(""),
         LlmProvider::ClaudeCode => unreachable!(),
     };
 
@@ -306,7 +302,10 @@ mod tests {
     #[test]
     fn openai_endpoint_already_has_chat_completions() {
         assert_eq!(
-            resolve_endpoint("http://localhost:8080/chat/completions", &LlmProvider::OpenAI),
+            resolve_endpoint(
+                "http://localhost:8080/chat/completions",
+                &LlmProvider::OpenAI
+            ),
             "http://localhost:8080/chat/completions"
         );
     }
@@ -330,7 +329,10 @@ mod tests {
     #[test]
     fn anthropic_endpoint_already_has_messages() {
         assert_eq!(
-            resolve_endpoint("https://api.anthropic.com/v1/messages", &LlmProvider::Anthropic),
+            resolve_endpoint(
+                "https://api.anthropic.com/v1/messages",
+                &LlmProvider::Anthropic
+            ),
             "https://api.anthropic.com/v1/messages"
         );
     }

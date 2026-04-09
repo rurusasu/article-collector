@@ -3,8 +3,7 @@ use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
 
-const USER_AGENT: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 
 pub async fn get_metadata(vid: &str) -> (String, String) {
     let url = format!(
@@ -65,23 +64,17 @@ pub async fn get_transcript(vid: &str) -> Result<String> {
         // Prefer English track, fallback to first
         let track = tracks
             .iter()
-            .find(|t| {
-                t.get("languageCode")
-                    .and_then(|l| l.as_str())
-                    == Some("en")
-            })
+            .find(|t| t.get("languageCode").and_then(|l| l.as_str()) == Some("en"))
             .unwrap_or(&tracks[0]);
 
-        let base_url = track
-            .get("baseUrl")
-            .and_then(|u| u.as_str())
-            .unwrap_or("");
+        let base_url = track.get("baseUrl").and_then(|u| u.as_str()).unwrap_or("");
 
         if base_url.is_empty() {
             return try_innertube(&client, &page, vid).await;
         }
 
         // Try json3 format first, then srv3/XML
+        let text_re = Regex::new(r"<text[^>]*>(.*?)</text>")?;
         for fmt in &["json3", "srv3", ""] {
             let fetch_url = if fmt.is_empty() {
                 base_url.to_string()
@@ -114,14 +107,15 @@ pub async fn get_transcript(vid: &str) -> Result<String> {
                 }
             } else {
                 // XML format
-                let text_re = Regex::new(r"<text[^>]*>(.*?)</text>")?;
                 let texts: Vec<String> = text_re
                     .captures_iter(&data)
                     .filter_map(|c| {
-                        let t = html_escape::decode_html_entities(&c[1])
-                            .trim()
-                            .to_string();
-                        if t.is_empty() { None } else { Some(t) }
+                        let t = html_escape::decode_html_entities(&c[1]).trim().to_string();
+                        if t.is_empty() {
+                            None
+                        } else {
+                            Some(t)
+                        }
                     })
                     .collect();
                 if !texts.is_empty() {
