@@ -20,8 +20,10 @@ npm install -g @anthropic-ai/claude-code @openai/codex
 # Rust: fetch dependencies
 cargo fetch
 
-# Git config: link public config
-ln -sf /workspaces/article-collector/.github/.gitconfig ~/.gitconfig
+# Git config: include repo config instead of symlinking
+# Symlinking causes VS Code's credential helper injection to modify the repo file directly.
+# Using [include] keeps the repo file read-only while still applying its settings.
+git config --global include.path /workspaces/article-collector/.github/.gitconfig
 
 echo ""
 echo "[devcontainer] Run the following to complete git setup:"
