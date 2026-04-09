@@ -1,1 +1,25 @@
-{}
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(gh pr create:*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"PR has been created. Execute the review process defined in docs/pr/README.md. Loop until all issues are resolved.\"}}'",
+            "timeout": 5,
+            "statusMessage": "Preparing PR review process..."
+          },
+          {
+            "type": "command",
+            "if": "Bash(git push:*)",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Push completed. If a PR exists, execute the review process defined in docs/pr/README.md. Loop until all issues are resolved.\"}}'",
+            "timeout": 5,
+            "statusMessage": "Checking PR review process..."
+          }
+        ]
+      }
+    ]
+  }
+}
