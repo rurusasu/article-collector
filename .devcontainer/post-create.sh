@@ -23,7 +23,8 @@ cargo fetch
 # Git config: include repo config instead of symlinking
 # Symlinking causes VS Code's credential helper injection to modify the repo file directly.
 # Using [include] keeps the repo file read-only while still applying its settings.
-git config --global include.path /workspaces/article-collector/.github/.gitconfig
+REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
+git config --global include.path "${REPO_ROOT}/.github/.gitconfig"
 
 echo ""
 echo "[devcontainer] Run the following to complete git setup:"

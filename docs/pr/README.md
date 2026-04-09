@@ -26,7 +26,7 @@ Link to the relevant Linear issue
 ### Creation Command
 
 ```bash
-gh pr create --title "feat: title" --body "..." --base master
+gh pr create --title "feat: title" --body "..." --base main
 ```
 
 ## PR Review Process
@@ -62,18 +62,14 @@ Run the **pr-review-toolkit** plugin to review code quality.
 
 ### Step 2: Security Guidance
 
-Run the **coderabbit** plugin to review from a security perspective.
+The **security-guidance** plugin runs automatically as a `PreToolUse` hook during Edit/Write operations. It does not require manual invocation.
 
 | Item | Value |
 |------|-------|
-| Plugin | `coderabbit` |
-| Skill | `review` |
-| Invocation | `/coderabbit:review` |
+| Plugin | `security-guidance` |
+| Type | Automatic (PreToolUse hook) |
 
-```
-/coderabbit:review
-```
-
+- Review any security warnings surfaced during Step 1 edits
 - **Fix all** security-related issues
 - Commit and push after fixes
 
