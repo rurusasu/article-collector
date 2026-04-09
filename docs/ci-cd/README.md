@@ -9,15 +9,16 @@ GitHub Actions で Rust の CI/CD パイプラインを構築している。
 
 ```mermaid
 graph TB
-  commit["commit"] --> hook["pre-commit hook<br/>Conventional Commits 検証"]
+  commit["commit"] --> hook["commit-msg hook<br/>Conventional Commits 検証"]
   hook --> push["push / PR"]
   push --> ci["CI<br/>fmt, clippy, test, build"]
   push --> shell["Shell Lint & Test"]
   ci --> merge["main にマージ"]
-  merge --> rp["release-please<br/>Release PR 自動作成"]
+  merge --> rp["release-please<br/>Release PR 自動作成<br/>CHANGELOG + Cargo.toml 更新"]
   rp --> rp_merge["Release PR マージ"]
-  rp_merge --> tag["v* tag 自動作成<br/>+ CHANGELOG 更新<br/>+ Cargo.toml バージョン更新"]
-  tag --> release["Release<br/>cross-compile + GitHub Release"]
+  rp_merge --> tag["v* tag + GitHub Release 作成"]
+  tag --> build["cross-compile build<br/>linux-amd64 / arm64"]
+  build --> upload["バイナリを Release にアップロード"]
 ```
 
 ## CI (`ci.yml`)
@@ -65,34 +66,33 @@ Conventional Commits を解析し、自動で:
 3. `Cargo.toml` の `version` を更新
 4. Release PR を作成
 
-Release PR がマージされると `v*` タグが自動作成され、`release.yml` が発火する。
+Release PR がマージされると、同じワークフロー内で:
+1. `v*` タグと GitHub Release を自動作成
+2. クロスコンパイルビルドを実行
+3. バイナリを GitHub Release にアップロード
 
-## Release (`release.yml`)
-
-**トリガー:** `v*` タグ push 時
+> **注意:** デフォルト `GITHUB_TOKEN` によるタグ push は別ワークフローをトリガーしないため、
+> release-please とビルドを同一ワークフローに統合している。
 
 ```mermaid
 graph TB
-  tag["v* tag push"] --> amd64["Build<br/>linux-amd64"]
+  rp_merge["Release PR マージ"] --> tag["tag + GitHub Release 作成"]
+  tag --> amd64["Build<br/>linux-amd64"]
   tag --> arm64["Build<br/>linux-arm64<br/>(cross-compile)"]
-
-  amd64 --> release["Create GitHub Release"]
-  arm64 --> release
-
-  release --> notes["Auto release notes"]
-  release --> upload["Upload binaries"]
+  amd64 --> upload["Upload binaries<br/>to GitHub Release"]
+  arm64 --> upload
 ```
 
 | Job | ターゲット | ツールチェイン |
 |-----|-----------|---------------|
 | Build (amd64) | `x86_64-unknown-linux-gnu` | stable |
 | Build (arm64) | `aarch64-unknown-linux-gnu` | stable + `aarch64-linux-gnu-gcc` |
-| Create Release | - | `softprops/action-gh-release@v2` |
 
 ### セキュリティ
 
-- `permissions: contents: write` は **Release ジョブのみ** に付与 (最小権限)
-- Build ジョブは `contents: read` のみ
+- `permissions: contents: write` + `pull-requests: write` をワークフローレベルで付与
+  - release-please: Release PR 作成・タグ push に必要
+  - build: `gh release upload` に必要
 
 ### ビルド戦略
 
@@ -132,6 +132,7 @@ git config core.hooksPath .githooks
 | ファイル | 用途 |
 |---------|------|
 | `.github/workflows/ci.yml` | CI (fmt, clippy, test, build, shellcheck, bats) |
-| `.github/workflows/release-please.yml` | Release PR 自動作成 |
-| `.github/workflows/release.yml` | Release (cross-compile, GitHub Releases) |
+| `.github/workflows/release-please.yml` | Release PR 自動作成 + ビルド + GitHub Release |
 | `.githooks/commit-msg` | Conventional Commits 検証 |
+| `release-please-config.json` | release-please 設定 |
+| `.release-please-manifest.json` | 現在のバージョン管理 |
