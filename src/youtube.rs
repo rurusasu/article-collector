@@ -223,6 +223,9 @@ mod tests {
 
     // ── extract_json3_texts ──
 
+    /// 検証: JSON3 形式の字幕データから正しくテキストセグメントを抽出する
+    /// 理由: YouTube の json3 形式は events[].segs[].utf8 に字幕テキストが格納される
+    /// リスク: 字幕テキストが取得できず、翻訳対象が空になる
     #[test]
     fn json3_extracts_segments() {
         let j = json!({
@@ -234,6 +237,9 @@ mod tests {
         assert_eq!(extract_json3_texts(&j), vec!["Hello", "World"]);
     }
 
+    /// 検証: 空文字列のセグメントをスキップする
+    /// 理由: YouTube API は空セグメントを含む場合がある（タイミング用の空エントリ）
+    /// リスク: 空文字列が結合に含まれ、余分なスペースが翻訳テキストに混入する
     #[test]
     fn json3_skips_empty_segments() {
         let j = json!({
@@ -245,6 +251,9 @@ mod tests {
         assert_eq!(extract_json3_texts(&j), vec!["Text"]);
     }
 
+    /// 検証: 改行のみのセグメントをスキップする
+    /// 理由: 改行文字のみのセグメントはテキストとして無意味
+    /// リスク: "\n" が翻訳テキストに混入し、出力ファイルのフォーマットが崩れる
     #[test]
     fn json3_skips_newline_only_segments() {
         let j = json!({
@@ -256,18 +265,27 @@ mod tests {
         assert_eq!(extract_json3_texts(&j), vec!["Content"]);
     }
 
+    /// 検証: events キーが存在しない JSON でパニックしないこと
+    /// 理由: API レスポンスが空または不完全な場合がある（字幕なし動画等）
+    /// リスク: None に対する unwrap でパニックが発生し、パイプライン全体が停止する
     #[test]
     fn json3_handles_missing_events() {
         let j = json!({});
         assert!(extract_json3_texts(&j).is_empty());
     }
 
+    /// 検証: segs キーが存在しないイベントでパニックしないこと
+    /// 理由: 一部のイベントは字幕ではなくタイミング情報のみを含む
+    /// リスク: segs が None の場合に unwrap パニックが発生する
     #[test]
     fn json3_handles_missing_segs() {
         let j = json!({"events": [{"duration": 1000}]});
         assert!(extract_json3_texts(&j).is_empty());
     }
 
+    /// 検証: 1つのイベントに複数セグメントがある場合、全て抽出する
+    /// 理由: 1つのタイムスタンプに複数の字幕断片が含まれることがある
+    /// リスク: 最初のセグメントのみ取得され、字幕が不完全になる
     #[test]
     fn json3_multiple_segs_per_event() {
         let j = json!({
@@ -283,6 +301,9 @@ mod tests {
 
     // ── extract_xml_texts ──
 
+    /// 検証: XML 形式の字幕データから <text> 要素のテキストを抽出する
+    /// 理由: YouTube の srv3/XML 形式は <text> タグに字幕が格納される
+    /// リスク: XML 字幕が全く取得できず、innertube フォールバックに無駄に遷移する
     #[test]
     fn xml_extracts_text_nodes() {
         let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
@@ -290,6 +311,9 @@ mod tests {
         assert_eq!(extract_xml_texts(&re, data), vec!["Hello", "World"]);
     }
 
+    /// 検証: 空の <text> 要素をスキップする
+    /// 理由: 無音区間等で空の text 要素が存在する
+    /// リスク: 空文字列が結合され、余分なスペースが翻訳テキストに混入する
     #[test]
     fn xml_skips_empty_text() {
         let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
@@ -297,6 +321,9 @@ mod tests {
         assert_eq!(extract_xml_texts(&re, data), vec!["Content"]);
     }
 
+    /// 検証: HTML エンティティ（&amp; 等）を正しくデコードする
+    /// 理由: XML 字幕データは &amp;, &lt; 等でエスケープされている
+    /// リスク: "&amp;" がそのまま翻訳テキストに残り、不自然な文章になる
     #[test]
     fn xml_decodes_html_entities() {
         let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
@@ -304,12 +331,18 @@ mod tests {
         assert_eq!(extract_xml_texts(&re, data), vec!["Hello & World"]);
     }
 
+    /// 検証: <text> 要素が存在しないデータで空ベクタを返す
+    /// 理由: レスポンスが HTML エラーページ等の場合、text 要素がない
+    /// リスク: 空結果を正しく処理できず、次のフォーマットへのフォールバックが動作しない
     #[test]
     fn xml_handles_no_matches() {
         let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
         assert!(extract_xml_texts(&re, "no xml here").is_empty());
     }
 
+    /// 検証: テキスト前後の空白を除去する
+    /// 理由: 字幕データにはインデントや余分な空白が含まれることがある
+    /// リスク: "  Trimmed  " のような不自然な空白が翻訳テキストに残る
     #[test]
     fn xml_trims_whitespace() {
         let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();

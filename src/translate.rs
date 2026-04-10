@@ -268,11 +268,17 @@ mod tests {
 
     // ── detect_provider ──
 
+    /// 検証: "claude-code" 文字列を ClaudeCode プロバイダーとして検出する
+    /// 理由: Claude Code CLI はローカル実行で HTTP API とは異なる呼び出し方法を使う
+    /// リスク: Claude Code が HTTP API として呼び出され、接続エラーになる
     #[test]
     fn detects_claude_code_provider() {
         assert_eq!(detect_provider("claude-code"), LlmProvider::ClaudeCode);
     }
 
+    /// 検証: Anthropic API URL を正しく検出する
+    /// 理由: Anthropic は独自の API フォーマット（messages API）を使う
+    /// リスク: Anthropic API に OpenAI フォーマットのリクエストを送信し、400 エラーになる
     #[test]
     fn detects_anthropic_provider() {
         assert_eq!(
@@ -281,6 +287,9 @@ mod tests {
         );
     }
 
+    /// 検証: OpenAI API URL を正しく検出する
+    /// 理由: OpenAI は chat/completions エンドポイントを使う
+    /// リスク: OpenAI API に Anthropic フォーマットのリクエストを送信し、エラーになる
     #[test]
     fn detects_openai_provider() {
         assert_eq!(
@@ -289,6 +298,9 @@ mod tests {
         );
     }
 
+    /// 検証: 未知の URL を OpenAI 互換プロバイダーとしてフォールバックする
+    /// 理由: ローカル LLM サーバー等は OpenAI 互換 API を提供することが多い
+    /// リスク: 未知の URL でパニックが発生し、翻訳が全く動作しない
     #[test]
     fn detects_generic_as_openai() {
         assert_eq!(
@@ -299,6 +311,9 @@ mod tests {
 
     // ── resolve_endpoint ──
 
+    /// 検証: 既に /chat/completions を含む URL をそのまま返す
+    /// 理由: 完全な URL が指定された場合、パスを二重付与しない
+    /// リスク: "/chat/completions/chat/completions" のような不正 URL になる
     #[test]
     fn openai_endpoint_already_has_chat_completions() {
         assert_eq!(
@@ -310,6 +325,9 @@ mod tests {
         );
     }
 
+    /// 検証: 末尾スラッシュ付き URL に /chat/completions を正しく付与する
+    /// 理由: "v1/" と "v1" の両方に対応する必要がある
+    /// リスク: "/v1//chat/completions" のようなダブルスラッシュが発生する
     #[test]
     fn openai_endpoint_with_v1_trailing_slash() {
         assert_eq!(
@@ -318,6 +336,9 @@ mod tests {
         );
     }
 
+    /// 検証: パスなしの URL に /chat/completions を付与する
+    /// 理由: ベース URL のみが指定される場合がある
+    /// リスク: ルート URL にリクエストが送信され、404 エラーになる
     #[test]
     fn openai_endpoint_bare_url() {
         assert_eq!(
@@ -326,6 +347,9 @@ mod tests {
         );
     }
 
+    /// 検証: 既に /v1/messages を含む Anthropic URL をそのまま返す
+    /// 理由: 完全な URL が指定された場合、パスを二重付与しない
+    /// リスク: "/v1/messages/v1/messages" のような不正 URL になる
     #[test]
     fn anthropic_endpoint_already_has_messages() {
         assert_eq!(
@@ -337,6 +361,9 @@ mod tests {
         );
     }
 
+    /// 検証: パスなしの Anthropic URL に /v1/messages を付与する
+    /// 理由: ベース URL のみが指定される場合がある
+    /// リスク: ルート URL にリクエストが送信され、404 エラーになる
     #[test]
     fn anthropic_endpoint_bare_url() {
         assert_eq!(
@@ -345,6 +372,9 @@ mod tests {
         );
     }
 
+    /// 検証: Claude Code プロバイダーのエンドポイントは空文字列を返す
+    /// 理由: Claude Code は CLI 経由で呼び出すため、HTTP エンドポイントは不要
+    /// リスク: 空でない URL が返され、HTTP リクエストが誤って送信される
     #[test]
     fn claude_code_endpoint_is_empty() {
         assert_eq!(
@@ -355,18 +385,27 @@ mod tests {
 
     // ── extract_content (array) ──
 
+    /// 検証: content フィールドから記事本文を抽出する
+    /// 理由: fetch で取得した JSON の content フィールドが翻訳対象
+    /// リスク: 記事本文が空のまま翻訳に渡され、空の翻訳結果が保存される
     #[test]
     fn extract_content_from_array_with_content_field() {
         let data = json!([{"title": "test", "content": "hello world"}]);
         assert_eq!(extract_content(&data), "hello world");
     }
 
+    /// 検証: content がない場合に title をフォールバックとして使う
+    /// 理由: 一部の取得先（ツイート等）は content なしで title のみの場合がある
+    /// リスク: title がフォールバックされず、翻訳対象が空になる
     #[test]
     fn extract_content_from_array_with_title_only() {
         let data = json!([{"title": "my title"}]);
         assert_eq!(extract_content(&data), "my title");
     }
 
+    /// 検証: 複数記事を区切り文字で結合する
+    /// 理由: 埋め込み記事等で複数要素が1つの JSON に含まれる場合がある
+    /// リスク: 記事が結合されず、最初の1つだけが翻訳される
     #[test]
     fn extract_content_from_array_joins_multiple() {
         let data = json!([
@@ -376,12 +415,18 @@ mod tests {
         assert_eq!(extract_content(&data), "first\n\n---\n\nsecond");
     }
 
+    /// 検証: 空配列で空文字列を返す（パニックしない）
+    /// 理由: fetch が空の結果を返す可能性がある
+    /// リスク: 空配列で unwrap パニックが発生する
     #[test]
     fn extract_content_from_empty_array() {
         let data = json!([]);
         assert_eq!(extract_content(&data), "");
     }
 
+    /// 検証: フィールドが空のオブジェクトで空文字列を返す
+    /// 理由: JSON 構造が期待と異なる場合にも安全に動作する必要がある
+    /// リスク: None に対する unwrap でパニックが発生する
     #[test]
     fn extract_content_from_array_with_empty_objects() {
         let data = json!([{}]);
@@ -390,24 +435,36 @@ mod tests {
 
     // ── extract_single_content ──
 
+    /// 検証: text, content, title の優先順位で text を優先する
+    /// 理由: text は HN 等で本文全体を含むフィールド
+    /// リスク: 短い title が text より優先され、本文が翻訳されない
     #[test]
     fn extract_single_prefers_text() {
         let data = json!({"text": "from text", "content": "from content", "title": "from title"});
         assert_eq!(extract_single_content(&data), "from text");
     }
 
+    /// 検証: text がない場合に content をフォールバックする
+    /// 理由: Dev.to 等は content フィールドに本文が格納される
+    /// リスク: content がスキップされ、title のみが翻訳される
     #[test]
     fn extract_single_falls_back_to_content() {
         let data = json!({"content": "from content", "title": "from title"});
         assert_eq!(extract_single_content(&data), "from content");
     }
 
+    /// 検証: text も content もない場合に title をフォールバックする
+    /// 理由: 最低限タイトルだけでも翻訳対象として抽出する
+    /// リスク: 翻訳対象が完全に空になる
     #[test]
     fn extract_single_falls_back_to_title() {
         let data = json!({"title": "from title"});
         assert_eq!(extract_single_content(&data), "from title");
     }
 
+    /// 検証: 全フィールドが欠如する JSON で空文字列を返す
+    /// 理由: 予期しない JSON 構造でもパニックしない安全性が必要
+    /// リスク: unwrap パニックでパイプライン全体が停止する
     #[test]
     fn extract_single_returns_empty_for_null() {
         let data = json!({});
