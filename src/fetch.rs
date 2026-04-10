@@ -244,6 +244,18 @@ async fn fetch_devto(url: &str, outfile: &Path) -> Result<()> {
     Ok(())
 }
 
+fn strip_html(html: &str) -> Result<String> {
+    // Remove script/style tags separately to avoid cross-tag mismatch
+    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")?;
+    let body = script_re.replace_all(html, "");
+    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")?;
+    let body = style_re.replace_all(&body, "");
+    let tag_re = Regex::new(r"<[^>]+>")?;
+    let body = tag_re.replace_all(&body, " ");
+    let ws_re = Regex::new(r"\s+")?;
+    Ok(ws_re.replace_all(&body, " ").trim().to_string())
+}
+
 async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
     eprintln!("Routing: {url} → generic web fetch");
 
@@ -262,15 +274,7 @@ async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
         .map(|m| html_escape::decode_html_entities(m.as_str().trim()).to_string())
         .unwrap_or_else(|| "untitled".to_string());
 
-    // Remove script/style tags separately to avoid cross-tag mismatch
-    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")?;
-    let body = script_re.replace_all(&html, "");
-    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")?;
-    let body = style_re.replace_all(&body, "");
-    let tag_re = Regex::new(r"<[^>]+>")?;
-    let body = tag_re.replace_all(&body, " ");
-    let ws_re = Regex::new(r"\s+")?;
-    let body = ws_re.replace_all(&body, " ").trim().to_string();
+    let body = strip_html(&html)?;
 
     // Truncate to 50000 chars
     let content: String = body.chars().take(50000).collect();
@@ -291,21 +295,33 @@ mod tests {
 
     // ── URL validation ──
 
+    /// 検証: http/https 以外のスキームを拒否する
+    /// 理由: 任意プロトコルの URL を fetch すると SSRF やプロトコル混乱の原因になる
+    /// リスク: ftp://, file:// 等の危険な URL が処理されてしまう
     #[test]
     fn rejects_url_without_http() {
         assert!(validate_url("not-a-url").is_err());
     }
 
+    /// 検証: ftp スキームを拒否する
+    /// 理由: HTTP(S) 以外のプロトコルはサポート対象外
+    /// リスク: ftp URL が reqwest に渡されてエラーまたは予期しない通信が発生する
     #[test]
     fn rejects_ftp_url() {
         assert!(validate_url("ftp://example.com/file").is_err());
     }
 
+    /// 検証: https URL を受理する
+    /// 理由: 正常な入力が拒否されないことの確認
+    /// リスク: 正当な URL が処理できずパイプラインが動作しない
     #[test]
     fn accepts_https_url() {
         assert!(validate_url("https://example.com").is_ok());
     }
 
+    /// 検証: http URL を受理する
+    /// 理由: HTTP サイトも取得対象として有効
+    /// リスク: http サイトの記事が取得できなくなる
     #[test]
     fn accepts_http_url() {
         assert!(validate_url("http://example.com").is_ok());
@@ -313,6 +329,9 @@ mod tests {
 
     // ── URL routing ──
 
+    /// 検証: HackerNews の URL を正しく Route::HackerNews にルーティングする
+    /// 理由: ドメインベースで取得方法を切り替えるため、誤分類は API 呼び出し失敗につながる
+    /// リスク: HN 記事が generic fetch され、コメントやスコアが取得できない
     #[test]
     fn routes_hn_url() {
         assert_eq!(
@@ -321,11 +340,17 @@ mod tests {
         );
     }
 
+    /// 検証: Dev.to の URL を正しくルーティングする
+    /// 理由: Dev.to は専用 API を使うため、誤分類は記事データの欠損につながる
+    /// リスク: Dev.to 記事の reaction 数やタグが取得できない
     #[test]
     fn routes_devto_url() {
         assert_eq!(classify_url("https://dev.to/author/slug"), Route::DevTo);
     }
 
+    /// 検証: youtube.com/watch 形式の URL をルーティングする
+    /// 理由: YouTube は字幕取得に専用処理が必要
+    /// リスク: YouTube 動画が generic fetch され、字幕が取得できない
     #[test]
     fn routes_youtube_watch_url() {
         assert_eq!(
@@ -334,11 +359,17 @@ mod tests {
         );
     }
 
+    /// 検証: youtu.be 短縮 URL をルーティングする
+    /// 理由: 短縮 URL も YouTube として処理する必要がある
+    /// リスク: 短縮 URL が generic fetch にフォールバックし、字幕取得失敗
     #[test]
     fn routes_youtu_be_url() {
         assert_eq!(classify_url("https://youtu.be/abc123"), Route::YouTube);
     }
 
+    /// 検証: x.com (旧 Twitter) の URL をルーティングする
+    /// 理由: X/Twitter は Syndication API を使うため、誤分類はツイート内容の取得失敗につながる
+    /// リスク: ツイートが generic fetch され、HTML スクレイピングでは内容を取得できない
     #[test]
     fn routes_x_com_url() {
         assert_eq!(
@@ -347,6 +378,9 @@ mod tests {
         );
     }
 
+    /// 検証: twitter.com の URL をルーティングする
+    /// 理由: 旧ドメインも引き続き使われるため対応が必要
+    /// リスク: twitter.com ドメインのリンクが処理できない
     #[test]
     fn routes_twitter_com_url() {
         assert_eq!(
@@ -355,6 +389,9 @@ mod tests {
         );
     }
 
+    /// 検証: 未知のドメインを Route::Generic にフォールバックする
+    /// 理由: 対応サイト以外も汎用的に取得できる必要がある
+    /// リスク: 未知のサイトでパニックまたはエラーが発生する
     #[test]
     fn routes_unknown_url_to_generic() {
         assert_eq!(classify_url("https://example.com/article"), Route::Generic);
@@ -362,45 +399,149 @@ mod tests {
 
     // ── ID / slug extraction ──
 
+    /// 検証: HN URL から item ID を正しく抽出する
+    /// 理由: Firebase API 呼び出しに正確な ID が必要
+    /// リスク: 不正な ID で API を呼び出し、404 エラーまたは別記事のデータを取得
     #[test]
     fn extracts_hn_item_id() {
         let id = extract_hn_id("https://news.ycombinator.com/item?id=42575").unwrap();
         assert_eq!(id, "42575");
     }
 
+    /// 検証: Dev.to URL から author/slug を抽出する
+    /// 理由: Dev.to API は author/slug 形式のパスが必要
+    /// リスク: スラグ抽出失敗で API 呼び出しが 404 になる
     #[test]
     fn extracts_devto_slug_from_url() {
         let slug = extract_devto_slug("https://dev.to/authorname/my-article-slug").unwrap();
         assert_eq!(slug, "authorname/my-article-slug");
     }
 
+    /// 検証: youtube.com/watch URL から動画 ID を抽出する
+    /// 理由: 字幕取得やメタデータ API に正確な動画 ID が必要
+    /// リスク: 誤った ID で別動画のデータを取得、または API エラー
     #[test]
     fn extracts_youtube_vid_from_watch() {
         let vid = extract_youtube_vid("https://www.youtube.com/watch?v=dQw4w9WgXcQ").unwrap();
         assert_eq!(vid, "dQw4w9WgXcQ");
     }
 
+    /// 検証: youtu.be 短縮 URL から動画 ID を抽出する
+    /// 理由: 短縮 URL のパス構造は watch URL と異なる
+    /// リスク: 短縮 URL で ID 抽出に失敗し、YouTube 処理全体が動作しない
     #[test]
     fn extracts_youtube_vid_from_youtu_be() {
         let vid = extract_youtube_vid("https://youtu.be/abc123XYZ").unwrap();
         assert_eq!(vid, "abc123XYZ");
     }
 
+    /// 検証: クエリパラメータ付き YouTube URL から動画 ID のみを抽出する
+    /// 理由: &t=120 等の追加パラメータが ID に混入すると API が失敗する
+    /// リスク: "xyz789&t=120" が ID として扱われ、API 呼び出しが 404 になる
     #[test]
     fn extracts_youtube_vid_with_extra_params() {
         let vid = extract_youtube_vid("https://www.youtube.com/watch?v=xyz789&t=120").unwrap();
         assert_eq!(vid, "xyz789");
     }
 
+    /// 検証: x.com URL からツイート ID を抽出する
+    /// 理由: Syndication API に正確なツイート ID が必要
+    /// リスク: ID 抽出失敗でツイート内容が取得できない
     #[test]
     fn extracts_tweet_id_from_x() {
         let id = extract_tweet_id("https://x.com/user/status/123456789").unwrap();
         assert_eq!(id, "123456789");
     }
 
+    /// 検証: twitter.com URL からツイート ID を抽出する
+    /// 理由: 旧ドメインでも同じ ID 抽出ロジックが動作する必要がある
+    /// リスク: 旧ドメインの URL でツイート取得が失敗する
     #[test]
     fn extracts_tweet_id_from_twitter() {
         let id = extract_tweet_id("https://twitter.com/user/status/987654321").unwrap();
         assert_eq!(id, "987654321");
+    }
+
+    // ── HTML stripping ──
+
+    /// 検証: script タグとその内容を完全に除去する
+    /// 理由: JavaScript コードが翻訳対象テキストに混入すると、翻訳品質が著しく低下する
+    /// リスク: alert() 等のコードが記事本文として翻訳・保存される
+    #[test]
+    fn strip_html_removes_script_tags() {
+        let html = "<p>Hello</p><script>alert('xss')</script><p>World</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    /// 検証: style タグとその内容を完全に除去する
+    /// 理由: CSS ルールが本文に混入すると翻訳テキストにノイズが入る
+    /// リスク: "body{color:red}" 等の CSS が記事本文に含まれる
+    #[test]
+    fn strip_html_removes_style_tags() {
+        let html = "<style>body{color:red}</style><p>Content</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Content");
+    }
+
+    /// 検証: script と style が同時に存在する HTML から両方を除去する
+    /// 理由: 実際の Web ページには両方が存在するのが一般的
+    /// リスク: 片方のみ除去され、もう片方の内容が残る
+    #[test]
+    fn strip_html_removes_script_and_style() {
+        let html = "<script>var x=1;</script><p>Text</p><style>.a{}</style>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Text");
+    }
+
+    /// 検証: script と style を個別に除去し、クロスタグの誤マッチを防ぐ
+    /// 理由: 以前の実装では (script|style) の結合パターンで <script>...<\/style> が
+    ///        マッチし、中間のテキストが誤って除去される可能性があった
+    /// リスク: 正常な本文テキストが script/style と一緒に除去される
+    #[test]
+    fn strip_html_no_cross_tag_mismatch() {
+        let html = "<script>code</script><p>Keep</p><style>css</style>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Keep");
+    }
+
+    /// 検証: 複数行にわたる script タグを除去する
+    /// 理由: 実際の JS コードは複数行が一般的。(?s) フラグが正しく動作することを確認
+    /// リスク: 改行を含む script が除去されず、大量の JS コードが翻訳対象になる
+    #[test]
+    fn strip_html_multiline_script() {
+        let html =
+            "<script type=\"text/javascript\">\nvar x = 1;\nvar y = 2;\n</script><p>Visible</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Visible");
+    }
+
+    /// 検証: HTML タグを除去しつつ、テキスト内容を保持する
+    /// 理由: タグ除去が過剰だとテキストも消える、不足だとタグが残る
+    /// リスク: 記事本文が欠落する、または <strong> 等のタグが翻訳テキストに残る
+    #[test]
+    fn strip_html_preserves_text_content() {
+        let html = "<h1>Title</h1><p>Paragraph with <strong>bold</strong> text.</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Title Paragraph with bold text.");
+    }
+
+    /// 検証: 連続する空白を単一スペースに正規化する
+    /// 理由: タグ除去後に余分な空白が残り、翻訳品質やファイルサイズに影響する
+    /// リスク: "Multiple   spaces" のような不自然なテキストが保存される
+    #[test]
+    fn strip_html_collapses_whitespace() {
+        let html = "<p>  Multiple   spaces  </p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Multiple spaces");
+    }
+
+    /// 検証: 空文字列入力でパニックやエラーが発生しないこと
+    /// 理由: fetch 失敗時に空レスポンスが返る可能性がある
+    /// リスク: 空入力で unwrap パニックが発生し、パイプライン全体が停止する
+    #[test]
+    fn strip_html_empty_input() {
+        let result = strip_html("").unwrap();
+        assert_eq!(result, "");
     }
 }

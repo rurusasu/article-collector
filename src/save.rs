@@ -187,25 +187,36 @@ mod tests {
 
     // ── URL validation ──
 
+    /// 検証: save モジュールから fetch の URL バリデーションが利用可能であること
+    /// 理由: save_and_pr は URL を受け取るため、不正 URL の早期拒否が必要
+    /// リスク: 不正 URL がそのまま git commit メッセージや PR に含まれる
     #[test]
     fn rejects_invalid_url() {
-        // save_and_pr checks TARGET_REPO first, so test the URL validation directly
         use crate::fetch::validate_url;
         assert!(validate_url("not-a-url").is_err());
     }
 
     // ── type detection ──
 
+    /// 検証: x.com URL を "x" タイプとして判定する
+    /// 理由: 記事タイプはファイル保存パス (articles/x/) に影響する
+    /// リスク: ツイートが誤ったディレクトリに保存される
     #[test]
     fn type_x_com() {
         assert_eq!(determine_type("https://x.com/user/status/123"), "x");
     }
 
+    /// 検証: twitter.com URL も "x" タイプとして判定する
+    /// 理由: 旧ドメインも x.com と同じタイプに分類する必要がある
+    /// リスク: twitter.com のツイートが "web" に分類され、保存先が不統一になる
     #[test]
     fn type_twitter_com() {
         assert_eq!(determine_type("https://twitter.com/user/status/123"), "x");
     }
 
+    /// 検証: youtube.com URL を "youtube" タイプとして判定する
+    /// 理由: YouTube 動画は articles/youtube/ に保存される
+    /// リスク: 動画が "web" に分類され、コンテンツ整理が破綻する
     #[test]
     fn type_youtube_com() {
         assert_eq!(
@@ -214,21 +225,33 @@ mod tests {
         );
     }
 
+    /// 検証: youtu.be 短縮 URL も "youtube" タイプとして判定する
+    /// 理由: 短縮 URL も同じ YouTube コンテンツを指す
+    /// リスク: 短縮 URL が "web" に分類され、同じ動画が別ディレクトリに保存される
     #[test]
     fn type_youtu_be() {
         assert_eq!(determine_type("https://youtu.be/abc123"), "youtube");
     }
 
+    /// 検証: arxiv.org URL を "paper" タイプとして判定する
+    /// 理由: 学術論文は articles/paper/ に分類される
+    /// リスク: 論文が "web" に分類され、学術コンテンツの検索性が低下する
     #[test]
     fn type_arxiv() {
         assert_eq!(determine_type("https://arxiv.org/abs/2301.12345"), "paper");
     }
 
+    /// 検証: doi.org URL を "paper" タイプとして判定する
+    /// 理由: DOI リンクは学術論文への永続リンク
+    /// リスク: DOI リンク経由の論文が "web" に分類される
     #[test]
     fn type_doi() {
         assert_eq!(determine_type("https://doi.org/10.1234/example"), "paper");
     }
 
+    /// 検証: openreview.net URL を "paper" タイプとして判定する
+    /// 理由: OpenReview は ML 論文のレビュープラットフォーム
+    /// リスク: ML 論文が "web" に分類され、学術コンテンツと区別できない
     #[test]
     fn type_openreview() {
         assert_eq!(
@@ -237,6 +260,9 @@ mod tests {
         );
     }
 
+    /// 検証: 未知のドメインを "web" タイプにフォールバックする
+    /// 理由: 全ての URL に対してタイプが決定される必要がある
+    /// リスク: 未知ドメインでパニックが発生する
     #[test]
     fn type_generic() {
         assert_eq!(determine_type("https://example.com/article"), "web");
@@ -244,11 +270,17 @@ mod tests {
 
     // ── title sanitization ──
 
+    /// 検証: タイトルから改行文字を除去する
+    /// 理由: タイトルは YAML frontmatter やファイル名に使われるため、改行があると構文エラーになる
+    /// リスク: frontmatter が壊れ、保存先リポジトリのビルドが失敗する
     #[test]
     fn sanitize_strips_newlines() {
         assert_eq!(sanitize_title("Line One\nLine Two"), "Line OneLine Two");
     }
 
+    /// 検証: ダブルクォートをエスケープする
+    /// 理由: frontmatter の title: "..." 内でエスケープされていないと YAML パースエラーになる
+    /// リスク: YAML が壊れ、静的サイトジェネレータがビルドに失敗する
     #[test]
     fn sanitize_escapes_double_quotes() {
         assert_eq!(
@@ -257,11 +289,17 @@ mod tests {
         );
     }
 
+    /// 検証: キャリッジリターンを除去する
+    /// 理由: Windows 環境の改行コード (\r\n) が混入する可能性がある
+    /// リスク: \r がタイトルに残り、表示やパースが異常になる
     #[test]
     fn sanitize_strips_carriage_returns() {
         assert_eq!(sanitize_title("Title\r\nWith CR"), "TitleWith CR");
     }
 
+    /// 検証: 200 文字を超えるタイトルを切り詰める
+    /// 理由: ファイル名やコミットメッセージの長さ制限を超えないようにする
+    /// リスク: 非常に長いタイトルでファイルシステムエラーや git commit が失敗する
     #[test]
     fn sanitize_truncates_to_200_chars() {
         let long: String = "-".repeat(300);
@@ -269,6 +307,9 @@ mod tests {
         assert_eq!(result.len(), 200);
     }
 
+    /// 検証: 複数の特殊文字が混在するタイトルを正しく処理する
+    /// 理由: 実際の記事タイトルには様々な特殊文字が含まれる
+    /// リスク: 特殊文字の組み合わせでエスケープ漏れが発生する
     #[test]
     fn sanitize_handles_mixed_special_chars() {
         assert_eq!(
@@ -279,26 +320,41 @@ mod tests {
 
     // ── slug generation ──
 
+    /// 検証: タイトルを小文字に変換する
+    /// 理由: ファイル名の一貫性のため、slug は常に小文字
+    /// リスク: 大文字小文字の違いで同じ記事が別ファイルとして保存される
     #[test]
     fn slug_lowercases() {
         assert_eq!(title_to_slug("Hello World"), "hello-world");
     }
 
+    /// 検証: 特殊文字をハイフンに置換する
+    /// 理由: ファイル名や URL に使えない文字を安全な文字に変換する
+    /// リスク: ファイル名に @ や # が含まれ、git 操作やシェルコマンドが失敗する
     #[test]
     fn slug_replaces_special_chars() {
         assert_eq!(title_to_slug("foo@bar#baz"), "foo-bar-baz");
     }
 
+    /// 検証: 連続するハイフンを1つに統合する
+    /// 理由: "foo---bar" より "foo-bar" の方が可読性が高い
+    /// リスク: URL やファイル名が見づらくなる（機能上の問題はないが品質の問題）
     #[test]
     fn slug_collapses_multiple_dashes() {
         assert_eq!(title_to_slug("foo---bar"), "foo-bar");
     }
 
+    /// 検証: 先頭末尾のハイフンを除去する
+    /// 理由: "-hello-" より "hello" の方が正しい slug
+    /// リスク: ハイフン始まりのファイル名がオプションとして誤解される
     #[test]
     fn slug_trims_leading_trailing_dashes() {
         assert_eq!(title_to_slug("-hello-"), "hello");
     }
 
+    /// 検証: 60 文字を超える slug を切り詰める
+    /// 理由: ファイルパスの長さ制限と git ブランチ名の制約を考慮
+    /// リスク: 非常に長い slug でファイルシステムやブランチ作成が失敗する
     #[test]
     fn slug_truncates_to_60_chars() {
         let long: String = "a".repeat(100);
