@@ -244,6 +244,18 @@ async fn fetch_devto(url: &str, outfile: &Path) -> Result<()> {
     Ok(())
 }
 
+fn strip_html(html: &str) -> Result<String> {
+    // Remove script/style tags separately to avoid cross-tag mismatch
+    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")?;
+    let body = script_re.replace_all(html, "");
+    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")?;
+    let body = style_re.replace_all(&body, "");
+    let tag_re = Regex::new(r"<[^>]+>")?;
+    let body = tag_re.replace_all(&body, " ");
+    let ws_re = Regex::new(r"\s+")?;
+    Ok(ws_re.replace_all(&body, " ").trim().to_string())
+}
+
 async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
     eprintln!("Routing: {url} → generic web fetch");
 
@@ -262,15 +274,7 @@ async fn fetch_generic(url: &str, outfile: &Path) -> Result<()> {
         .map(|m| html_escape::decode_html_entities(m.as_str().trim()).to_string())
         .unwrap_or_else(|| "untitled".to_string());
 
-    // Remove script/style tags separately to avoid cross-tag mismatch
-    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>")?;
-    let body = script_re.replace_all(&html, "");
-    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>")?;
-    let body = style_re.replace_all(&body, "");
-    let tag_re = Regex::new(r"<[^>]+>")?;
-    let body = tag_re.replace_all(&body, " ");
-    let ws_re = Regex::new(r"\s+")?;
-    let body = ws_re.replace_all(&body, " ").trim().to_string();
+    let body = strip_html(&html)?;
 
     // Truncate to 50000 chars
     let content: String = body.chars().take(50000).collect();
@@ -402,5 +406,64 @@ mod tests {
     fn extracts_tweet_id_from_twitter() {
         let id = extract_tweet_id("https://twitter.com/user/status/987654321").unwrap();
         assert_eq!(id, "987654321");
+    }
+
+    // ── HTML stripping ──
+
+    #[test]
+    fn strip_html_removes_script_tags() {
+        let html = "<p>Hello</p><script>alert('xss')</script><p>World</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn strip_html_removes_style_tags() {
+        let html = "<style>body{color:red}</style><p>Content</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Content");
+    }
+
+    #[test]
+    fn strip_html_removes_script_and_style() {
+        let html = "<script>var x=1;</script><p>Text</p><style>.a{}</style>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Text");
+    }
+
+    #[test]
+    fn strip_html_no_cross_tag_mismatch() {
+        // script closing tag should not match style opening tag
+        let html = "<script>code</script><p>Keep</p><style>css</style>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Keep");
+    }
+
+    #[test]
+    fn strip_html_multiline_script() {
+        let html =
+            "<script type=\"text/javascript\">\nvar x = 1;\nvar y = 2;\n</script><p>Visible</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Visible");
+    }
+
+    #[test]
+    fn strip_html_preserves_text_content() {
+        let html = "<h1>Title</h1><p>Paragraph with <strong>bold</strong> text.</p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Title Paragraph with bold text.");
+    }
+
+    #[test]
+    fn strip_html_collapses_whitespace() {
+        let html = "<p>  Multiple   spaces  </p>";
+        let result = strip_html(html).unwrap();
+        assert_eq!(result, "Multiple spaces");
+    }
+
+    #[test]
+    fn strip_html_empty_input() {
+        let result = strip_html("").unwrap();
+        assert_eq!(result, "");
     }
 }

@@ -107,17 +107,7 @@ pub async fn get_transcript(vid: &str) -> Result<String> {
                 }
             } else {
                 // XML format
-                let texts: Vec<String> = text_re
-                    .captures_iter(&data)
-                    .filter_map(|c| {
-                        let t = html_escape::decode_html_entities(&c[1]).trim().to_string();
-                        if t.is_empty() {
-                            None
-                        } else {
-                            Some(t)
-                        }
-                    })
-                    .collect();
+                let texts = extract_xml_texts(&text_re, &data);
                 if !texts.is_empty() {
                     return Ok(texts.join(" "));
                 }
@@ -127,6 +117,20 @@ pub async fn get_transcript(vid: &str) -> Result<String> {
 
     // Fallback to innertube
     try_innertube(&client, &page, vid).await
+}
+
+fn extract_xml_texts(text_re: &Regex, data: &str) -> Vec<String> {
+    text_re
+        .captures_iter(data)
+        .filter_map(|c| {
+            let t = html_escape::decode_html_entities(&c[1]).trim().to_string();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
+        })
+        .collect()
 }
 
 fn extract_json3_texts(j: &Value) -> Vec<String> {
@@ -210,4 +214,106 @@ async fn try_innertube(client: &Client, page: &str, _vid: &str) -> Result<String
     }
 
     Ok(texts.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── extract_json3_texts ──
+
+    #[test]
+    fn json3_extracts_segments() {
+        let j = json!({
+            "events": [
+                {"segs": [{"utf8": "Hello "}]},
+                {"segs": [{"utf8": "World"}]}
+            ]
+        });
+        assert_eq!(extract_json3_texts(&j), vec!["Hello", "World"]);
+    }
+
+    #[test]
+    fn json3_skips_empty_segments() {
+        let j = json!({
+            "events": [
+                {"segs": [{"utf8": ""}]},
+                {"segs": [{"utf8": "Text"}]}
+            ]
+        });
+        assert_eq!(extract_json3_texts(&j), vec!["Text"]);
+    }
+
+    #[test]
+    fn json3_skips_newline_only_segments() {
+        let j = json!({
+            "events": [
+                {"segs": [{"utf8": "\n"}]},
+                {"segs": [{"utf8": "Content"}]}
+            ]
+        });
+        assert_eq!(extract_json3_texts(&j), vec!["Content"]);
+    }
+
+    #[test]
+    fn json3_handles_missing_events() {
+        let j = json!({});
+        assert!(extract_json3_texts(&j).is_empty());
+    }
+
+    #[test]
+    fn json3_handles_missing_segs() {
+        let j = json!({"events": [{"duration": 1000}]});
+        assert!(extract_json3_texts(&j).is_empty());
+    }
+
+    #[test]
+    fn json3_multiple_segs_per_event() {
+        let j = json!({
+            "events": [{
+                "segs": [
+                    {"utf8": "Part A"},
+                    {"utf8": "Part B"}
+                ]
+            }]
+        });
+        assert_eq!(extract_json3_texts(&j), vec!["Part A", "Part B"]);
+    }
+
+    // ── extract_xml_texts ──
+
+    #[test]
+    fn xml_extracts_text_nodes() {
+        let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
+        let data = r#"<text start="0" dur="5">Hello</text><text start="5" dur="3">World</text>"#;
+        assert_eq!(extract_xml_texts(&re, data), vec!["Hello", "World"]);
+    }
+
+    #[test]
+    fn xml_skips_empty_text() {
+        let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
+        let data = r#"<text start="0" dur="5"></text><text start="5" dur="3">Content</text>"#;
+        assert_eq!(extract_xml_texts(&re, data), vec!["Content"]);
+    }
+
+    #[test]
+    fn xml_decodes_html_entities() {
+        let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
+        let data = r#"<text start="0" dur="5">Hello &amp; World</text>"#;
+        assert_eq!(extract_xml_texts(&re, data), vec!["Hello & World"]);
+    }
+
+    #[test]
+    fn xml_handles_no_matches() {
+        let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
+        assert!(extract_xml_texts(&re, "no xml here").is_empty());
+    }
+
+    #[test]
+    fn xml_trims_whitespace() {
+        let re = Regex::new(r"<text[^>]*>(.*?)</text>").unwrap();
+        let data = r#"<text start="0" dur="5">  Trimmed  </text>"#;
+        assert_eq!(extract_xml_texts(&re, data), vec!["Trimmed"]);
+    }
 }
