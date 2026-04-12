@@ -28,12 +28,12 @@ URL → 記事取得 → 翻訳 → PR 作成を自動化する Rust 製 CLI ツ
 winget install GitHub.cli
 
 # 3. リポジトリをクローンしてビルド
-git clone https://github.com/<owner>/article-collector.git
+git clone https://github.com/rurusasu/article-collector.git
 cd article-collector
 cargo build --release
 
 # 4. バイナリを PATH の通った場所にコピー（任意）
-cp target/release/article-collector.exe ~/bin/
+cp target/release/article-collector.exe ~/bin/article-collector
 ```
 
 #### 方法 2: WSL (Windows Subsystem for Linux)
@@ -43,7 +43,7 @@ cp target/release/article-collector.exe ~/bin/
 wsl
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
-git clone https://github.com/<owner>/article-collector.git
+git clone https://github.com/rurusasu/article-collector.git
 cd article-collector
 cargo build --release
 ```
@@ -56,10 +56,11 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source ~/.cargo/env
 
 # 2. GitHub CLI をインストール（save-and-pr を使う場合）
+# Homebrew が必要: https://brew.sh
 brew install gh
 
 # 3. リポジトリをクローンしてビルド
-git clone https://github.com/<owner>/article-collector.git
+git clone https://github.com/rurusasu/article-collector.git
 cd article-collector
 cargo build --release
 
@@ -83,7 +84,7 @@ sudo dnf install gh
 sudo pacman -S github-cli
 
 # 3. リポジトリをクローンしてビルド
-git clone https://github.com/<owner>/article-collector.git
+git clone https://github.com/rurusasu/article-collector.git
 cd article-collector
 cargo build --release
 
@@ -97,7 +98,7 @@ cp target/release/article-collector ~/.local/bin/
 
 ```bash
 # 最新リリースをダウンロード（例: amd64）
-gh release download --repo <owner>/article-collector --pattern "article-collector-linux-amd64"
+gh release download --repo rurusasu/article-collector --pattern "article-collector-linux-amd64"
 chmod +x article-collector-linux-amd64
 mv article-collector-linux-amd64 ~/.local/bin/article-collector
 ```
@@ -261,7 +262,7 @@ gh auth login
 
 本ツールは一時ディレクトリとして `/tmp/collect` を使用します。ネイティブの Windows コマンドプロンプトや PowerShell では `/tmp` が存在しないため、以下のいずれかで実行してください:
 
-- **Git Bash**: `/tmp` は自動的に `C:\Users\<user>\AppData\Local\Temp` にマッピングされます
+- **Git Bash**: MSYS2 レイヤーにより `/tmp` パスが利用可能です
 - **WSL**: Linux と同じパスが使えます
 
 ### `gh auth login` が必要
