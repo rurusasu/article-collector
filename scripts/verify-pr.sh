@@ -39,20 +39,28 @@ FAILED=0
 SKIPPED=0
 RESULT_ITEMS=""
 
+escape_json() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g'
+}
+
 run_rule() {
   local description="$1"
   local command="$2"
   local item_text="$3"
+  local escaped_item
+  escaped_item=$(escape_json "$item_text")
 
   printf "  %-55s " "${item_text:0:55}"
+  # Safety: $command comes only from the checked-in verify-rules.sh file,
+  # never from PR body or other user input. eval is safe here.
   if eval "$command" > /dev/null 2>&1; then
     echo -e "${GREEN}[PASS]${RESET} $description"
-    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${item_text}\",\"status\":\"pass\"},"
+    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${escaped_item}\",\"status\":\"pass\"},"
     PASSED=$((PASSED + 1))
     return 0
   else
     echo -e "${RED}[FAIL]${RESET} $description"
-    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${item_text}\",\"status\":\"fail\"},"
+    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${escaped_item}\",\"status\":\"fail\"},"
     FAILED=$((FAILED + 1))
     return 1
   fi
@@ -76,9 +84,11 @@ match_and_run() {
   done
 
   if [ "$matched" -eq 0 ]; then
+    local escaped_item
+    escaped_item=$(escape_json "$item_text")
     printf "  %-55s " "${item_text:0:55}"
     echo -e "${YELLOW}[SKIP]${RESET} No matching rule (manual verification required)"
-    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${item_text}\",\"status\":\"skip\"},"
+    RESULT_ITEMS="${RESULT_ITEMS}{\"item\":\"${escaped_item}\",\"status\":\"skip\"},"
     SKIPPED=$((SKIPPED + 1))
   fi
 }
@@ -117,7 +127,7 @@ else
   ITEMS=()
   while IFS= read -r line; do
     [ -n "$line" ] && ITEMS+=("$line")
-  done <<< "$(echo "$PR_BODY" | sed -n 's/^- \[[ x]\] \(.*\)/\1/p')"
+  done <<< "$(echo "$PR_BODY" | tr -d '\r' | sed -n 's/^- \[[ xX]\] \(.*\)/\1/p')"
 
   if [ ${#ITEMS[@]} -eq 0 ]; then
     echo "No checklist items found in PR description."

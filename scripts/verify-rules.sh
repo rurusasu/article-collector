@@ -4,6 +4,7 @@
 # 各ルールは verify_rules 配列に追加する。フォーマット:
 #   "パターン(grep -iE):::コマンド:::説明"
 # セパレータは ::: (コロン3つ)
+# 制約: パターン・コマンド・説明に ::: を含めないこと
 
 VERIFY_RULES=(
   "[Mm]arkdown.*レンダリング|Markdown.*render|Markdown.*valid:::npx --yes marked README.md > /dev/null 2>&1:::Validate Markdown rendering"

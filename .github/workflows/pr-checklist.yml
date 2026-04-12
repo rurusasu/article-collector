@@ -29,4 +29,5 @@ jobs:
       - name: Verify PR checklist
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/verify-pr.sh ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash scripts/verify-pr.sh "$PR_NUMBER"
