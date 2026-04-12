@@ -28,6 +28,16 @@ VERIFY_RULES+=(
 )
 ```
 
+## CI 自動監視
+
+`git push` 後に PostToolUse hook が `scripts/wait-ci.sh` を自動実行し、CI 完了まで待機する（最大5分）。
+
+- CI pass → PR レビュープロセスに進む
+- CI fail → 失敗ログが自動的にコンテキストに注入される。**CI failure は即座に修正すること**
+- タイムアウト → `gh pr checks <PR_NUMBER> --watch` で手動監視
+
+この仕組みは hook により自動実行されるため、手動での CI 確認は不要。
+
 ## コーディング規約
 
 - Rust stable toolchain を使用
