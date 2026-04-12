@@ -4,37 +4,132 @@ URL → 記事取得 → 翻訳 → PR 作成を自動化する Rust 製 CLI ツ
 
 任意の OpenAI 互換 API / Anthropic API / Claude Code で翻訳。go-task またはバイナリ直接実行で動作。
 
-## Quick Start
+## セットアップ
 
-### Rust バイナリ (推奨)
+### 前提条件
+
+| Tool | Version | 用途 |
+|------|---------|------|
+| Rust | stable | ビルドに必要 |
+| git | 2.0+ | リポジトリ操作 |
+| gh | 2.0+ | GitHub CLI（`save-and-pr` で使用） |
+
+### Windows
+
+> **注意**: 本ツールは一時ファイルの保存に `/tmp/collect` を使用します。Windows ではネイティブのコマンドプロンプトではなく、**Git Bash** または **WSL** 経由で実行してください。
+
+#### 方法 1: Git Bash で実行（推奨）
 
 ```bash
+# 1. Rust をインストール（未導入の場合）
+# https://rustup.rs/ からインストーラをダウンロードして実行
+
+# 2. GitHub CLI をインストール（save-and-pr を使う場合）
+winget install GitHub.cli
+
+# 3. リポジトリをクローンしてビルド
+git clone https://github.com/rurusasu/article-collector.git
+cd article-collector
 cargo build --release
+
+# 4. バイナリを PATH の通った場所にコピー（任意）
+cp target/release/article-collector.exe ~/bin/article-collector
+```
+
+#### 方法 2: WSL (Windows Subsystem for Linux)
+
+```bash
+# WSL 内で Linux と同じ手順でセットアップ（下記「Linux」参照）
+wsl
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+git clone https://github.com/rurusasu/article-collector.git
+cd article-collector
+cargo build --release
+```
+
+### macOS
+
+```bash
+# 1. Rust をインストール
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. GitHub CLI をインストール（save-and-pr を使う場合）
+# Homebrew が必要: https://brew.sh
+brew install gh
+
+# 3. リポジトリをクローンしてビルド
+git clone https://github.com/rurusasu/article-collector.git
+cd article-collector
+cargo build --release
+
+# 4. バイナリを PATH の通った場所にコピー（任意）
+cp target/release/article-collector ~/.local/bin/
+```
+
+### Linux
+
+```bash
+# 1. Rust をインストール
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# 2. GitHub CLI をインストール（save-and-pr を使う場合）
+# Ubuntu/Debian:
+sudo apt install gh
+# Fedora:
+sudo dnf install gh
+# Arch:
+sudo pacman -S github-cli
+
+# 3. リポジトリをクローンしてビルド
+git clone https://github.com/rurusasu/article-collector.git
+cd article-collector
+cargo build --release
+
+# 4. バイナリを PATH の通った場所にコピー（任意）
+cp target/release/article-collector ~/.local/bin/
+```
+
+#### GitHub Releases からバイナリを直接取得（Linux のみ）
+
+リリースされたバイナリは Linux amd64 / arm64 のみ提供されています。
+
+```bash
+# 最新リリースをダウンロード（例: amd64）
+gh release download --repo rurusasu/article-collector --pattern "article-collector-linux-amd64"
+chmod +x article-collector-linux-amd64
+mv article-collector-linux-amd64 ~/.local/bin/article-collector
+```
+
+## Quick Start
+
+```bash
+# 環境変数を設定
 export LLM_API_URL="https://api.openai.com/v1"
 export LLM_API_TOKEN="sk-..."
 export TARGET_REPO="your-org/your-repo"
 
-./target/release/article-collector collect https://news.ycombinator.com/item?id=42575537
+# 記事を収集（取得 → 翻訳 → PR 作成まで一括実行）
+article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
 
-### go-task (レガシーシェルスクリプト)
+fetch のみ（翻訳・PR なし）で試す場合:
+
+```bash
+article-collector fetch https://news.ycombinator.com/item?id=42575537
+# 結果: /tmp/collect/raw.json に保存される
+```
+
+### go-task（レガシーシェルスクリプト）
 
 ```bash
 pip3 install youtube-transcript-api
 task collect URL=https://news.ycombinator.com/item?id=42575537
 ```
 
-## Requirements
-
-### Rust バイナリ
-
-| Tool | Version | Install |
-|------|---------|---------|
-| Rust | stable | https://rustup.rs/ |
-| git | 2.0+ | OS built-in |
-| gh | 2.0+ | `apt install gh` / `brew install gh` |
-
-### go-task (レガシー)
+go-task の追加依存:
 
 | Tool | Version | Install |
 |------|---------|---------|
@@ -52,9 +147,9 @@ task collect URL=https://news.ycombinator.com/item?id=42575537
 article-collector collect <URL>
 
 # 個別ステップ
-article-collector fetch <URL>
-article-collector translate [INPUT_JSON]
-article-collector save-and-pr <URL>
+article-collector fetch <URL>           # URL から記事を取得 → /tmp/collect/raw.json
+article-collector translate [INPUT_JSON] # JSON を翻訳 → /tmp/collect/translated.md
+article-collector save-and-pr <URL>      # 翻訳結果をターゲットリポジトリに PR
 ```
 
 ## Configuration
@@ -160,6 +255,27 @@ gh auth login
 
 - Issue tracking: [Linear (ArticleCollector)](https://linear.app/life-style-base/project/articlecollector-5d3a0da1c15c)
 - ガイド: [docs/linear/README.md](docs/linear/README.md), [docs/pr/README.md](docs/pr/README.md)
+
+## Troubleshooting
+
+### Windows: `/tmp/collect` が見つからない
+
+本ツールは一時ディレクトリとして `/tmp/collect` を使用します。ネイティブの Windows コマンドプロンプトや PowerShell では `/tmp` が存在しないため、以下のいずれかで実行してください:
+
+- **Git Bash**: MSYS2 レイヤーにより `/tmp` パスが利用可能です
+- **WSL**: Linux と同じパスが使えます
+
+### `gh auth login` が必要
+
+`save-and-pr` サブコマンドは `gh` CLI を使って PR を作成します。初回は認証が必要です:
+
+```bash
+gh auth login
+```
+
+### Claude Code で翻訳する場合
+
+`LLM_API_URL=claude-code` を設定すると、ローカルにインストールされた Claude Code CLI (`claude -p`) を呼び出して翻訳します。事前に Claude Code がインストール・認証済みであることを確認してください。
 
 ## License
 
