@@ -6,6 +6,7 @@
 # セパレータは ::: (コロン3つ)
 # 制約: パターン・コマンド・説明に ::: を含めないこと
 
+# shellcheck disable=SC2034  # Used by verify-pr.sh via source
 VERIFY_RULES=(
   "[Mm]arkdown.*レンダリング|Markdown.*render|Markdown.*valid:::npx --yes marked README.md > /dev/null 2>&1:::Validate Markdown rendering"
   "cargo test|ユニットテスト|unit test:::cargo test --locked:::Run Rust unit tests"

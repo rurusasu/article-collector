@@ -50,7 +50,7 @@ jobs:
         run: sudo apt-get install -y shellcheck bats jq
 
       - name: Run shellcheck
-        run: shellcheck scripts/*.sh
+        run: shellcheck -x scripts/*.sh
 
       - name: Run bats tests
         run: bats tests/

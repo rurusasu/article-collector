@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RESULT_FILE="/tmp/verify-pr-result.json"
 
 # Load rules
+# shellcheck source=verify-rules.sh
 source "$SCRIPT_DIR/verify-rules.sh"
 
 # Colors (if terminal supports)
