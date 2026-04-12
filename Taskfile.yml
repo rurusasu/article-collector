@@ -52,3 +52,18 @@ tasks:
     desc: "bats でユニットテストを実行"
     cmds:
       - bats tests/
+
+  verify-pr:
+    desc: "PR チェックリストを自動検証"
+    requires:
+      vars: [PR_NUMBER]
+    preconditions:
+      - sh: command -v gh
+        msg: "gh CLI is required"
+    cmds:
+      - bash {{.SCRIPTS_DIR}}/verify-pr.sh {{.PR_NUMBER}}
+
+  verify-local:
+    desc: "PR なしで全ルールをローカル実行"
+    cmds:
+      - bash {{.SCRIPTS_DIR}}/verify-pr.sh --local

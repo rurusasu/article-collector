@@ -80,14 +80,34 @@ Verify **all** items listed in the PR description's `Test plan` **locally on the
 > **重要:** チェックリストの検証は必ず **すべての修正（Step 1〜2 の fix commit）が完了した後** に実施すること。
 > 修正前や修正途中の状態で検証しても、修正による副作用やリグレッションを検出できない。
 
-- 各項目を実際にコマンド実行・動作確認して検証する（目視や推測で通過させない）
-- If all items pass, **immediately** update the PR description (check the boxes via `gh pr edit`)
+#### 自動検証（必須）
+
+```bash
+# 1. verify-pr を実行（必須 — これを実行しないと PR 更新がブロックされる）
+task verify-pr PR_NUMBER=<number>
+```
+
+- `[PASS]` 項目: 自動検証済み
+- `[SKIP]` 項目: 対応するルールがない。手動でコマンドを実行して検証し、結果をユーザーに提示すること
+- `[FAIL]` 項目: 修正して再実行
+
+#### ルール
+
+- 各項目を実際にコマンド実行・動作確認して検証する（**目視や推測で通過させない**）
+- `verify-pr` の実行結果が `/tmp/verify-pr-result.json` に保存される
+- この結果が `pass` でないと `gh pr edit` / `gh api` による PR 更新が **hook でブロック**される
+- If all items pass, **immediately** update the PR description (check the boxes)
 - If any item fails, fix and re-verify
 - **検証と PR description の更新は必ずセットで行うこと。** 検証だけ行って更新を忘れると、PR の状態が実際の検証結果と乖離する
 
+#### 検証ルールの追加
+
+SKIP 項目を自動化したい場合は `scripts/verify-rules.sh` にルールを追加する:
+
 ```bash
-# 検証通過後、必ず PR description を更新する
-gh pr edit <PR_NUMBER> --body "..."
+VERIFY_RULES+=(
+  "パターン(grep -iE):::コマンド:::説明"
+)
 ```
 
 ### Step 4: PR Comment Resolution
