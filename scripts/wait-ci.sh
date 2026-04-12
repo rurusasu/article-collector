@@ -28,8 +28,10 @@ escape_json_string() {
 
 while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
   # gh pr checks を実行（stderr は分離）
-  if ! CHECKS_OUTPUT=$(gh pr checks "$PR_NUMBER" 2>/dev/null); then
-    EXIT_CODE=$?
+  EXIT_CODE=0
+  CHECKS_OUTPUT=$(gh pr checks "$PR_NUMBER" 2>/dev/null) || EXIT_CODE=$?
+
+  if [ "$EXIT_CODE" -ne 0 ]; then
     # Exit code 8 = checks pending (gh CLI convention)
     if [ "$EXIT_CODE" -eq 8 ]; then
       sleep "$POLL_INTERVAL"
