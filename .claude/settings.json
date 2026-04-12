@@ -2,18 +2,21 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash(gh api:*pulls*-f body*)",
         "hooks": [
           {
             "type": "command",
-            "if": "Bash(gh api:*pulls*-f body*)",
             "command": "bash -c 'RESULT=/tmp/verify-pr-result.json; if [ ! -f \"$RESULT\" ]; then echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"verify-pr has not been run. Execute: task verify-pr PR_NUMBER=<number>\\\"}\"; exit 0; fi; STATUS=$(cat \"$RESULT\" | sed -n '\"'\"'s/.*\"status\":\"\\([^\"]*\\)\".*/\\1/p'\"'\"'); if [ \"$STATUS\" != \"pass\" ]; then echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"verify-pr failed. Fix issues and re-run before updating PR.\\\"}\"; exit 0; fi; echo \"{\\\"decision\\\":\\\"allow\\\"}\"'",
             "timeout": 10,
             "statusMessage": "Checking verify-pr results..."
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "Bash(gh pr edit:*)",
+        "hooks": [
           {
             "type": "command",
-            "if": "Bash(gh pr edit:*)",
             "command": "bash -c 'RESULT=/tmp/verify-pr-result.json; if [ ! -f \"$RESULT\" ]; then echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"verify-pr has not been run. Execute: task verify-pr PR_NUMBER=<number>\\\"}\"; exit 0; fi; STATUS=$(cat \"$RESULT\" | sed -n '\"'\"'s/.*\"status\":\"\\([^\"]*\\)\".*/\\1/p'\"'\"'); if [ \"$STATUS\" != \"pass\" ]; then echo \"{\\\"decision\\\":\\\"block\\\",\\\"reason\\\":\\\"verify-pr failed. Fix issues and re-run before updating PR.\\\"}\"; exit 0; fi; echo \"{\\\"decision\\\":\\\"allow\\\"}\"'",
             "timeout": 10,
             "statusMessage": "Checking verify-pr results..."
@@ -35,9 +38,9 @@
           {
             "type": "command",
             "if": "Bash(git push:*)",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"Push completed. If a PR exists, execute the review process defined in docs/pr/README.md. Loop until all issues are resolved.\"}}'",
-            "timeout": 5,
-            "statusMessage": "Checking PR review process..."
+            "command": "bash scripts/wait-ci.sh",
+            "timeout": 330,
+            "statusMessage": "Waiting for CI to complete..."
           }
         ]
       }
