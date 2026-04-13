@@ -43,7 +43,7 @@ cd article-collector
 cargo build --release
 
 # 4. バイナリを PATH の通った場所にコピー（任意）
-cp target/release/article-collector.exe ~/bin/article-collector
+cp target/release/article-collector.exe ~/bin/article-collector.exe
 ```
 
 #### 方法 3: WSL (Windows Subsystem for Linux)
@@ -240,7 +240,7 @@ graph TB
 
   subgraph Release["Release (v* tag)"]
     direction LR
-    build["Build<br/>linux-amd64 / arm64"]
+    build["Build<br/>linux / windows / macOS"]
     gh_release["GitHub Release<br/>+ binaries"]
     build --> gh_release
   end
