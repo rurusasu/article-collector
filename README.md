@@ -18,11 +18,21 @@ URL → 記事取得 → 翻訳 → PR 作成を自動化する Rust 製 CLI ツ
 
 > **注意**: 本ツールは一時ファイルの保存に `/tmp/collect` を使用します。Windows ではネイティブのコマンドプロンプトではなく、**Git Bash** または **WSL** 経由で実行してください。
 
-#### 方法 1: Git Bash で実行（推奨）
+#### 方法 1: GitHub Releases からダウンロード（推奨）
+
+```bash
+# Git Bash で実行
+gh release download --repo rurusasu/article-collector --pattern "article-collector-windows-amd64.exe"
+mkdir -p ~/bin
+mv article-collector-windows-amd64.exe ~/bin/article-collector.exe
+```
+
+#### 方法 2: ソースからビルド
 
 ```bash
 # 1. Rust をインストール（未導入の場合）
 # https://rustup.rs/ からインストーラをダウンロードして実行
+# Visual Studio Build Tools の "C++ build tools" ワークロードも必要
 
 # 2. GitHub CLI をインストール（save-and-pr を使う場合）
 winget install GitHub.cli
@@ -36,7 +46,7 @@ cargo build --release
 cp target/release/article-collector.exe ~/bin/article-collector
 ```
 
-#### 方法 2: WSL (Windows Subsystem for Linux)
+#### 方法 3: WSL (Windows Subsystem for Linux)
 
 ```bash
 # WSL 内で Linux と同じ手順でセットアップ（下記「Linux」参照）
@@ -92,15 +102,27 @@ cargo build --release
 cp target/release/article-collector ~/.local/bin/
 ```
 
-#### GitHub Releases からバイナリを直接取得（Linux のみ）
+#### GitHub Releases からバイナリを直接取得
 
-リリースされたバイナリは Linux amd64 / arm64 のみ提供されています。
+各プラットフォーム向けのビルド済みバイナリが GitHub Releases で提供されています。
+
+| Platform | Asset |
+|----------|-------|
+| Linux amd64 | `article-collector-linux-amd64` |
+| Linux arm64 | `article-collector-linux-arm64` |
+| Windows amd64 | `article-collector-windows-amd64.exe` |
+| macOS amd64 (Intel) | `article-collector-macos-amd64` |
+| macOS arm64 (Apple Silicon) | `article-collector-macos-arm64` |
 
 ```bash
-# 最新リリースをダウンロード（例: amd64）
+# Linux / macOS
 gh release download --repo rurusasu/article-collector --pattern "article-collector-linux-amd64"
 chmod +x article-collector-linux-amd64
 mv article-collector-linux-amd64 ~/.local/bin/article-collector
+
+# Windows (PowerShell)
+gh release download --repo rurusasu/article-collector --pattern "article-collector-windows-amd64.exe"
+Move-Item article-collector-windows-amd64.exe "$env:USERPROFILE\bin\article-collector.exe"
 ```
 
 ## Quick Start

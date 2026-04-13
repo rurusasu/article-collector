@@ -39,6 +39,15 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: article-collector-linux-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: article-collector-windows-amd64.exe
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: article-collector-macos-amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: article-collector-macos-arm64
     steps:
       - uses: actions/checkout@v4
 
@@ -73,10 +82,17 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           cp target/${{ matrix.target }}/release/article-collector ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cp target/${{ matrix.target }}/release/article-collector.exe ${{ matrix.artifact }}
+        shell: bash
 
       - name: Upload release asset
         run: gh release upload ${{ needs.release-please.outputs.tag_name }} ${{ matrix.artifact }}
