@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/rurusasu/article-collector/compare/article-collector-v0.2.0...article-collector-v0.2.1) (2026-06-11)
+
+
+### Bug Fixes
+
+* use rustls for reqwest TLS ([af766c5](https://github.com/rurusasu/article-collector/commit/af766c512f03e78151a7316fed9fdd05902fd6d9))
+
 ## [0.2.0](https://github.com/rurusasu/article-collector/compare/article-collector-v0.1.0...article-collector-v0.2.0) (2026-06-11)
 
 
