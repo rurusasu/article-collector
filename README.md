@@ -112,34 +112,8 @@ article-collector collect https://example.com/article
 |----------|------|-------------------|
 | `article-collector collect <URL>` | 取得、翻訳、保存、PR 作成をまとめて実行 | `raw.json` / `translated.md` を作成し、保存先 repo に PR を作成 |
 | `article-collector fetch <URL>` | URL から記事本文を取得 | `raw.json` を作成 |
-| `article-collector translate [INPUT_JSON]` | 取得済み JSON を翻訳。省略時は作業ディレクトリの `raw.json` を読む | `translated.md` を作成 |
+| `article-collector translate [INPUT_JSON]` | 取得済み JSON を翻訳。省略時は `raw.json` を読む | `translated.md` を作成 |
 | `article-collector save-and-pr <URL>` | 翻訳済み Markdown を保存して PR を作成 | 保存先 repo に branch / commit / PR を作成 |
-
-## 作業ディレクトリ
-
-取得結果と翻訳結果は作業ディレクトリに保存される。
-
-| OS | Default |
-|----|---------|
-| Linux / macOS / Git Bash / WSL | `/tmp/collect` |
-| Windows native | `%TEMP%\article-collector` |
-
-任意の場所に変えたい場合:
-
-```bash
-export ARTICLE_COLLECTOR_OUTDIR="$HOME/.cache/article-collector"
-```
-
-```powershell
-$env:ARTICLE_COLLECTOR_OUTDIR = "$env:TEMP\article-collector"
-```
-
-出力ファイル:
-
-| File | 内容 |
-|------|------|
-| `raw.json` | `fetch` の取得結果 |
-| `translated.md` | `translate` の翻訳結果 |
 
 ## 設定
 
