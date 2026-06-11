@@ -59,6 +59,33 @@ cargo install --git https://github.com/rurusasu/article-collector --locked
 article-collector fetch https://example.com/article
 ```
 
+## 処理フロー
+
+`article-collector collect <URL>` は、記事取得、翻訳、保存、PR 作成を順に実行する。
+`fetch` / `translate` / `save-and-pr` は同じ処理を個別に実行するための subcommand。
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant CLI as article-collector
+    participant Fetch as fetch
+    participant LLM as LLM provider
+    participant Save as save-and-pr
+    participant GitHub as GitHub
+
+    User->>CLI: article-collector collect <URL>
+    CLI->>Fetch: fetch_url(URL)
+    Fetch-->>CLI: raw.json
+    CLI->>LLM: translate(raw.json)
+    LLM-->>CLI: translated.md
+    CLI->>Save: save_and_pr(URL)
+    Save->>GitHub: create branch / commit / PR
+    alt AUTO_MERGE=true
+        Save->>GitHub: merge PR
+    end
+    GitHub-->>User: PR or merged article
+```
+
 ## Quick Start
 
 fetch のみなら翻訳 API や GitHub 認証なしで試せる。
