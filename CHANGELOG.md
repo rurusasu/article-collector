@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/rurusasu/article-collector/compare/article-collector-v0.2.1...article-collector-v0.2.2) (2026-06-11)
+
+
+### Bug Fixes
+
+* use supported macOS Intel release runner ([ed374cb](https://github.com/rurusasu/article-collector/commit/ed374cb5595259bc3b8685dc3020383f07dea7ff))
+
 ## [0.2.1](https://github.com/rurusasu/article-collector/compare/article-collector-v0.2.0...article-collector-v0.2.1) (2026-06-11)
 
 
