@@ -4,9 +4,8 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
 
+use crate::paths;
 use crate::youtube;
-
-const OUTDIR: &str = "/tmp/collect";
 
 #[derive(Debug, PartialEq)]
 pub enum Route {
@@ -75,8 +74,9 @@ pub fn extract_devto_slug(url: &str) -> Result<String> {
 pub async fn fetch_url(url: &str) -> Result<()> {
     validate_url(url)?;
 
-    fs::create_dir_all(OUTDIR)?;
-    let outfile = Path::new(OUTDIR).join("raw.json");
+    let outdir = paths::outdir();
+    fs::create_dir_all(&outdir)?;
+    let outfile = outdir.join("raw.json");
 
     match classify_url(url) {
         Route::Twitter => fetch_twitter(url, &outfile).await,
@@ -86,7 +86,7 @@ pub async fn fetch_url(url: &str) -> Result<()> {
         Route::Generic => fetch_generic(url, &outfile).await,
     }?;
 
-    eprintln!("Fetch complete: {OUTDIR}/");
+    eprintln!("Fetch complete: {}/", outdir.display());
     Ok(())
 }
 

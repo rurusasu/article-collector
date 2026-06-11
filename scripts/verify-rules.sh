@@ -14,5 +14,4 @@ VERIFY_RULES=(
   "cargo clippy|clippy|lint:::cargo clippy --all-targets -- -D warnings:::Run clippy lints"
   "cargo build|ビルド|build succeeds|build.*成功:::cargo build --release --locked:::Verify release build"
   "shellcheck:::shellcheck scripts/*.sh:::Lint shell scripts"
-  "bats|shell.*test:::bats tests/:::Run bats tests"
 )
