@@ -106,19 +106,14 @@ export LLM_API_URL="claude-code"
 article-collector collect https://example.com/article
 ```
 
-## CLI の使い方
+## コマンド一覧
 
-```bash
-# 全工程 (取得 -> 翻訳 -> 保存 -> PR)
-article-collector collect <URL>
-
-# 個別ステップ
-article-collector fetch <URL>
-article-collector translate [INPUT_JSON]
-article-collector save-and-pr <URL>
-```
-
-`translate` の `INPUT_JSON` を省略した場合は、作業ディレクトリ内の `raw.json` を読む。
+| コマンド | 役割 | 主な出力 / 副作用 |
+|----------|------|-------------------|
+| `article-collector collect <URL>` | 取得、翻訳、保存、PR 作成をまとめて実行 | `raw.json` / `translated.md` を作成し、保存先 repo に PR を作成 |
+| `article-collector fetch <URL>` | URL から記事本文を取得 | `raw.json` を作成 |
+| `article-collector translate [INPUT_JSON]` | 取得済み JSON を翻訳。省略時は作業ディレクトリの `raw.json` を読む | `translated.md` を作成 |
+| `article-collector save-and-pr <URL>` | 翻訳済み Markdown を保存して PR を作成 | 保存先 repo に branch / commit / PR を作成 |
 
 ## 作業ディレクトリ
 
