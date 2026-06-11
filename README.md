@@ -2,7 +2,7 @@
 
 URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツール。
 
-任意の OpenAI 互換 API / Anthropic API / Claude Code で翻訳できる。通常の CLI として使うツールであり、GitHub CLI extension ではない。
+任意の OpenAI 互換 API / Anthropic API / Claude Code CLI で翻訳できる。通常の CLI として使うツールであり、GitHub CLI extension ではない。
 
 ## セットアップ
 
@@ -77,12 +77,15 @@ export TARGET_REPO="your-org/your-repo"
 article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
 
-Claude Code CLI を使う場合:
+Claude Code CLI を個人のローカル環境で使う場合:
 
 ```bash
 export LLM_API_URL="claude-code"
 article-collector collect https://example.com/article
 ```
+
+この方法はローカルの `claude` CLI を `claude -p -` で呼び出す。
+2026-06-15 以降、Claude subscription plan での `claude -p` は interactive Claude Code 枠ではなく Agent SDK monthly credit を消費する。
 
 ## CLI Usage
 
@@ -129,7 +132,7 @@ $env:ARTICLE_COLLECTOR_OUTDIR = "$env:TEMP\article-collector"
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ARTICLE_COLLECTOR_OUTDIR` | No | OS 依存 | `raw.json` / `translated.md` の保存先 |
-| `LLM_API_URL` | No | `claude-code` | API エンドポイント。`claude-code` で Claude Code CLI 使用 |
+| `LLM_API_URL` | No | `claude-code` | API エンドポイント。`claude-code` で Claude Code CLI (`claude -p`) 使用 |
 | `LLM_API_TOKEN` | Yes* | - | API 認証トークン |
 | `LLM_MODEL` | No | provider 依存 | 翻訳に使うモデル |
 | `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
@@ -140,6 +143,25 @@ $env:ARTICLE_COLLECTOR_OUTDIR = "$env:TEMP\article-collector"
 
 \* `LLM_API_URL=claude-code` の場合は不要。
 \*\* `save-and-pr` / `collect` の保存ステップのみ必要。
+
+### Claude Code CLI 利用時の注意
+
+翻訳そのものは Claude の一般用途として扱われているが、`LLM_API_URL=claude-code` は非対話の `claude -p` 実行になる。
+Claude subscription plan で使う場合、2026-06-15 以降は Agent SDK monthly credit の対象になる。
+credit を超えると、usage credits が有効なら標準 API rate で継続し、無効なら credit 更新まで停止する。
+
+個人のローカル実行や開発補助には使えるが、第三者ユーザーのリクエストを Free / Pro / Max plan の認証情報へ流す用途には使わない。
+共有サービス、本番バッチ、チームでの継続的な自動化では、Anthropic API key または対応 cloud provider を使う:
+
+```bash
+export LLM_API_URL="https://api.anthropic.com"
+export LLM_API_TOKEN="sk-ant-..."
+```
+
+参考:
+
+- [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
+- [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
 
 `save-and-pr` は `gh` CLI を使うため、事前に認証が必要:
 
