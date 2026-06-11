@@ -81,7 +81,7 @@ sequenceDiagram
     GitHub-->>User: PR or merged article
 ```
 
-## Quick Start
+## クイックスタート
 
 fetch のみなら翻訳 API や GitHub 認証なしで試せる。
 
@@ -106,7 +106,7 @@ export LLM_API_URL="claude-code"
 article-collector collect https://example.com/article
 ```
 
-## CLI Usage
+## CLI の使い方
 
 ```bash
 # 全工程 (取得 -> 翻訳 -> 保存 -> PR)
@@ -146,7 +146,7 @@ $env:ARTICLE_COLLECTOR_OUTDIR = "$env:TEMP\article-collector"
 | `raw.json` | `fetch` の取得結果 |
 | `translated.md` | `translate` の翻訳結果 |
 
-## Configuration
+## 設定
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -188,7 +188,7 @@ export LLM_API_TOKEN="sk-ant-..."
 gh auth login
 ```
 
-## Supported Sites
+## 対応サイト
 
 | Domain | Method | Auth |
 |--------|--------|------|
@@ -198,7 +198,7 @@ gh auth login
 | X/Twitter | Syndication API | Public tweets only |
 | Other | HTTP fetch + HTML scraping | None |
 
-## Development
+## 開発
 
 ```bash
 cargo fmt --check
@@ -215,14 +215,14 @@ task translate
 task check
 ```
 
-## Release
+## リリース
 
 `main` 宛の PR が merge されると `.github/workflows/release.yml` が実行される。
 通常の PR merge では release-please が Release PR を作成・更新し、Release PR が merge されると GitHub Release と各 OS 向け asset が作成される。
 
 詳細: [docs/ci-cd/README.md](docs/ci-cd/README.md)
 
-## Troubleshooting
+## トラブルシューティング
 
 ### `cargo` が見つからない
 
@@ -233,7 +233,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
 
-### Release download が失敗する
+### リリースのダウンロードが失敗する
 
 asset 名が platform と一致しているか、latest release に対象 asset があるかを確認する。
 急ぐ場合や対象 platform の asset がない場合は、`cargo install --git https://github.com/rurusasu/article-collector --locked` を使う。
@@ -243,6 +243,6 @@ asset 名が platform と一致しているか、latest release に対象 asset 
 現在の構成は通常の CLI (`article-collector`) 用。
 GitHub CLI extension として `gh article-collector ...` で使うには、別途 `gh-article-collector` 名の実行ファイルまたは GitHub CLI extension 用の repo 構成が必要。
 
-## License
+## ライセンス
 
 MIT
