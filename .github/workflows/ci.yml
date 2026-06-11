@@ -40,17 +40,14 @@ jobs:
       - name: Verify release build
         run: cargo build --release --locked
 
-  shell-lint:
-    name: Shell Lint & Test
+  script-lint:
+    name: Script Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get install -y shellcheck bats jq
+        run: sudo apt-get install -y shellcheck
 
       - name: Run shellcheck
         run: shellcheck -x scripts/*.sh
-
-      - name: Run bats tests
-        run: bats tests/

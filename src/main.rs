@@ -1,4 +1,5 @@
 mod fetch;
+mod paths;
 mod save;
 mod translate;
 mod youtube;
@@ -29,8 +30,7 @@ enum Commands {
     /// 取得した記事を翻訳
     Translate {
         /// 入力 JSON ファイルパス
-        #[arg(default_value = "/tmp/collect/raw.json")]
-        input: PathBuf,
+        input: Option<PathBuf>,
     },
     /// 翻訳記事を保存して PR 作成
     SaveAndPr {
@@ -46,14 +46,15 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Collect { ref url } => {
             fetch::fetch_url(url).await?;
-            translate::translate(&PathBuf::from("/tmp/collect/raw.json")).await?;
+            translate::translate(&paths::raw_json_path()).await?;
             save::save_and_pr(url)?;
         }
         Commands::Fetch { ref url } => {
             fetch::fetch_url(url).await?;
         }
         Commands::Translate { ref input } => {
-            translate::translate(input).await?;
+            let input = input.clone().unwrap_or_else(paths::raw_json_path);
+            translate::translate(&input).await?;
         }
         Commands::SaveAndPr { ref url } => {
             save::save_and_pr(url)?;

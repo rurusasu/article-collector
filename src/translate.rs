@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
-const OUTDIR: &str = "/tmp/collect";
+use crate::paths;
 
 #[derive(Debug, PartialEq)]
 pub enum LlmProvider {
@@ -39,12 +39,13 @@ pub async fn translate(input: &Path) -> Result<()> {
 
     // Translate main content
     let translated = translate_text(&provider, &api_url, &lang, &content).await?;
-    let translated_path = PathBuf::from(OUTDIR).join("translated.md");
+    let outdir = paths::outdir();
+    fs::create_dir_all(&outdir)?;
+    let translated_path = paths::translated_md_path();
     fs::write(&translated_path, &translated)?;
 
     // Translate embedded articles if they exist
-    let outdir = Path::new(OUTDIR);
-    if let Ok(entries) = fs::read_dir(outdir) {
+    if let Ok(entries) = fs::read_dir(&outdir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("embedded_") && name.ends_with(".json") {
@@ -102,23 +103,20 @@ fn call_claude_code(prompt: &str) -> Result<String> {
 
     eprintln!("Calling claude CLI...");
 
-    // Ensure pnpm/npm global bin dirs are in PATH
-    let mut path = std::env::var("PATH").unwrap_or_default();
-    if let Some(home) = dirs::home_dir() {
-        for extra in [
-            home.join("AppData/Local/pnpm"),
-            home.join(".npm-global/bin"),
-            home.join(".local/bin"),
-        ] {
-            if extra.exists() {
-                path = format!("{};{}", extra.display(), path);
-            }
-        }
-    }
+    let path = augmented_path();
 
-    // Pipe prompt via stdin to avoid argument escaping issues on Windows
-    let mut child = Command::new("cmd")
-        .args(["/c", "claude", "-p", "-"])
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.args(["/c", "claude", "-p", "-"]);
+        command
+    } else {
+        let mut command = Command::new("claude");
+        command.args(["-p", "-"]);
+        command
+    };
+
+    // Pipe prompt via stdin to avoid argument escaping issues.
+    let mut child = command
         .env("PATH", &path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -145,6 +143,29 @@ fn call_claude_code(prompt: &str) -> Result<String> {
     }
 
     Ok(result)
+}
+
+fn augmented_path() -> std::ffi::OsString {
+    let mut paths = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    if let Some(home) = dirs::home_dir() {
+        for extra in [
+            home.join("AppData/Local/pnpm"),
+            home.join(".npm-global/bin"),
+            home.join(".local/bin"),
+        ]
+        .into_iter()
+        .rev()
+        {
+            if extra.exists() {
+                paths.insert(0, extra);
+            }
+        }
+    }
+
+    std::env::join_paths(paths).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
 }
 
 pub fn resolve_endpoint(api_url: &str, provider: &LlmProvider) -> String {

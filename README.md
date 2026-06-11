@@ -1,110 +1,33 @@
 # article-collector
 
-URL → 記事取得 → 翻訳 → PR 作成を自動化する Rust 製 CLI ツール。
+URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツール。
 
-任意の OpenAI 互換 API / Anthropic API / Claude Code で翻訳。go-task またはバイナリ直接実行で動作。
+任意の OpenAI 互換 API / Anthropic API / Claude Code で翻訳できる。通常の CLI として使うツールであり、GitHub CLI extension ではない。
 
 ## セットアップ
 
-### 前提条件
+### 推奨: cargo install
 
-| Tool | Version | 用途 |
-|------|---------|------|
-| Rust | stable | ビルドに必要 |
-| git | 2.0+ | リポジトリ操作 |
-| gh | 2.0+ | GitHub CLI（`save-and-pr` で使用） |
-
-### Windows
-
-> **注意**: 本ツールは一時ファイルの保存に `/tmp/collect` を使用します。Windows ではネイティブのコマンドプロンプトではなく、**Git Bash** または **WSL** 経由で実行してください。
-
-#### 方法 1: GitHub Releases からダウンロード（推奨）
+GitHub Release がまだ存在しない場合でも、この方法でインストールできる。
 
 ```bash
-# Git Bash で実行
-gh release download --repo rurusasu/article-collector --pattern "article-collector-windows-amd64.exe"
-mkdir -p ~/bin
-mv article-collector-windows-amd64.exe ~/bin/article-collector.exe
+cargo install --git https://github.com/rurusasu/article-collector --locked
+article-collector fetch https://example.com/article
 ```
 
-#### 方法 2: ソースからビルド
+Windows で `cargo` が未導入の場合は、先に Rust を入れる:
 
-```bash
-# 1. Rust をインストール（未導入の場合）
-# https://rustup.rs/ からインストーラをダウンロードして実行
-# Visual Studio Build Tools の "C++ build tools" ワークロードも必要
-
-# 2. GitHub CLI をインストール（save-and-pr を使う場合）
-winget install GitHub.cli
-
-# 3. リポジトリをクローンしてビルド
-git clone https://github.com/rurusasu/article-collector.git
-cd article-collector
-cargo build --release
-
-# 4. バイナリを PATH の通った場所にコピー（任意）
-cp target/release/article-collector.exe ~/bin/article-collector.exe
+```powershell
+winget install Rustlang.Rustup
+# 新しい PowerShell を開き直してから実行
+cargo install --git https://github.com/rurusasu/article-collector --locked
+article-collector fetch https://example.com/article
 ```
 
-#### 方法 3: WSL (Windows Subsystem for Linux)
+### GitHub Releases から取得
 
-```bash
-# WSL 内で Linux と同じ手順でセットアップ（下記「Linux」参照）
-wsl
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-git clone https://github.com/rurusasu/article-collector.git
-cd article-collector
-cargo build --release
-```
-
-### macOS
-
-```bash
-# 1. Rust をインストール
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# 2. GitHub CLI をインストール（save-and-pr を使う場合）
-# Homebrew が必要: https://brew.sh
-brew install gh
-
-# 3. リポジトリをクローンしてビルド
-git clone https://github.com/rurusasu/article-collector.git
-cd article-collector
-cargo build --release
-
-# 4. バイナリを PATH の通った場所にコピー（任意）
-cp target/release/article-collector ~/.local/bin/
-```
-
-### Linux
-
-```bash
-# 1. Rust をインストール
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# 2. GitHub CLI をインストール（save-and-pr を使う場合）
-# Ubuntu/Debian:
-sudo apt install gh
-# Fedora:
-sudo dnf install gh
-# Arch:
-sudo pacman -S github-cli
-
-# 3. リポジトリをクローンしてビルド
-git clone https://github.com/rurusasu/article-collector.git
-cd article-collector
-cargo build --release
-
-# 4. バイナリを PATH の通った場所にコピー（任意）
-cp target/release/article-collector ~/.local/bin/
-```
-
-#### GitHub Releases からバイナリを直接取得
-
-各プラットフォーム向けのビルド済みバイナリが GitHub Releases で提供されています。
+Release workflow により GitHub Release が作成された後は、ビルド済みバイナリも利用できる。
+Release がまだない時点ではこの手順は使えない。
 
 | Platform | Asset |
 |----------|-------|
@@ -119,91 +42,101 @@ cp target/release/article-collector ~/.local/bin/
 gh release download --repo rurusasu/article-collector --pattern "article-collector-linux-amd64"
 chmod +x article-collector-linux-amd64
 mv article-collector-linux-amd64 ~/.local/bin/article-collector
+```
 
-# Windows (PowerShell)
+```powershell
+# Windows PowerShell
 gh release download --repo rurusasu/article-collector --pattern "article-collector-windows-amd64.exe"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\bin" | Out-Null
 Move-Item article-collector-windows-amd64.exe "$env:USERPROFILE\bin\article-collector.exe"
 ```
 
 ## Quick Start
 
+fetch のみなら翻訳 API や GitHub 認証なしで試せる。
+
 ```bash
-# 環境変数を設定
+article-collector fetch https://news.ycombinator.com/item?id=42575537
+```
+
+全工程を実行する場合:
+
+```bash
 export LLM_API_URL="https://api.openai.com/v1"
 export LLM_API_TOKEN="sk-..."
 export TARGET_REPO="your-org/your-repo"
 
-# 記事を収集（取得 → 翻訳 → PR 作成まで一括実行）
 article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
 
-fetch のみ（翻訳・PR なし）で試す場合:
+Claude Code CLI を使う場合:
 
 ```bash
-article-collector fetch https://news.ycombinator.com/item?id=42575537
-# 結果: /tmp/collect/raw.json に保存される
+export LLM_API_URL="claude-code"
+article-collector collect https://example.com/article
 ```
-
-### go-task（レガシーシェルスクリプト）
-
-```bash
-pip3 install youtube-transcript-api
-task collect URL=https://news.ycombinator.com/item?id=42575537
-```
-
-go-task の追加依存:
-
-| Tool | Version | Install |
-|------|---------|---------|
-| bash | 4+ | OS built-in |
-| curl | any | OS built-in |
-| jq | 1.6+ | `apt install jq` / `brew install jq` |
-| python3 | 3.8+ | OS built-in |
-| youtube-transcript-api | latest | `pip3 install youtube-transcript-api` |
-| go-task | 3.0+ | https://taskfile.dev/installation/ |
 
 ## CLI Usage
 
 ```bash
-# 全工程 (取得 → 翻訳 → 保存 → PR)
+# 全工程 (取得 -> 翻訳 -> 保存 -> PR)
 article-collector collect <URL>
 
 # 個別ステップ
-article-collector fetch <URL>           # URL から記事を取得 → /tmp/collect/raw.json
-article-collector translate [INPUT_JSON] # JSON を翻訳 → /tmp/collect/translated.md
-article-collector save-and-pr <URL>      # 翻訳結果をターゲットリポジトリに PR
+article-collector fetch <URL>
+article-collector translate [INPUT_JSON]
+article-collector save-and-pr <URL>
 ```
+
+`translate` の `INPUT_JSON` を省略した場合は、作業ディレクトリ内の `raw.json` を読む。
+
+## 作業ディレクトリ
+
+取得結果と翻訳結果は作業ディレクトリに保存される。
+
+| OS | Default |
+|----|---------|
+| Linux / macOS / Git Bash / WSL | `/tmp/collect` |
+| Windows native | `%TEMP%\article-collector` |
+
+任意の場所に変えたい場合:
+
+```bash
+export ARTICLE_COLLECTOR_OUTDIR="$HOME/.cache/article-collector"
+```
+
+```powershell
+$env:ARTICLE_COLLECTOR_OUTDIR = "$env:TEMP\article-collector"
+```
+
+出力ファイル:
+
+| File | 内容 |
+|------|------|
+| `raw.json` | `fetch` の取得結果 |
+| `translated.md` | `translate` の翻訳結果 |
 
 ## Configuration
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `LLM_API_URL` | Yes | — | API エンドポイント (`claude-code` で Claude Code CLI 使用) |
-| `LLM_API_TOKEN` | Yes* | — | API 認証トークン |
-| `LLM_MODEL` | No | provider依存 | 翻訳に使うモデル |
+| `ARTICLE_COLLECTOR_OUTDIR` | No | OS 依存 | `raw.json` / `translated.md` の保存先 |
+| `LLM_API_URL` | No | `claude-code` | API エンドポイント。`claude-code` で Claude Code CLI 使用 |
+| `LLM_API_TOKEN` | Yes* | - | API 認証トークン |
+| `LLM_MODEL` | No | provider 依存 | 翻訳に使うモデル |
 | `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
-| `TARGET_REPO` | Yes** | — | 保存先 GitHub リポジトリ (owner/repo) |
-| `TARGET_DIR` | No | `/tmp/target-repo` | ローカルクローン先 |
+| `TARGET_REPO` | Yes** | - | 保存先 GitHub リポジトリ (`owner/repo`) |
+| `TARGET_DIR` | No | OS 依存 | 保存先 repo のローカル clone 先 |
 | `SAVE_PATH_TEMPLATE` | No | `articles/${TYPE}/` | 保存先パステンプレート |
-| `AUTO_MERGE` | No | `true` | PR 作成後に auto-merge |
-| `GITHUB_TOKEN` | Yes** | — | GitHub API 認証 |
+| `AUTO_MERGE` | No | `true` | PR 作成後に merge する |
 
-\* `LLM_API_URL=claude-code` の場合は不要
-\*\* `save-and-pr` ステップのみ必要
+\* `LLM_API_URL=claude-code` の場合は不要。
+\*\* `save-and-pr` / `collect` の保存ステップのみ必要。
 
-### LLM プロバイダー設定例
+`save-and-pr` は `gh` CLI を使うため、事前に認証が必要:
 
 ```bash
-# Claude Code (ローカル CLI)
-export LLM_API_URL="claude-code"
-
-# Anthropic API
-export LLM_API_URL="https://api.anthropic.com/v1"
-export LLM_API_TOKEN="sk-ant-..."
-
-# OpenAI API
-export LLM_API_URL="https://api.openai.com/v1"
-export LLM_API_TOKEN="sk-..."
+gh auth login
 ```
 
 ## Supported Sites
@@ -212,92 +145,56 @@ export LLM_API_TOKEN="sk-..."
 |--------|--------|------|
 | HackerNews | Firebase public API | None |
 | Dev.to | Dev.to public API | None |
-| YouTube | oEmbed + caption API | None |
+| YouTube | oEmbed + caption fetch | None |
 | X/Twitter | Syndication API | Public tweets only |
 | Other | HTTP fetch + HTML scraping | None |
 
-## Pipeline Flow
+## Development
 
-```mermaid
-graph LR
-  url["URL"] --> fetch["fetch"]
-  fetch --> raw["/tmp/collect/raw.json"]
-  raw --> translate["translate"]
-  translate --> md["/tmp/collect/translated.md"]
-  md --> save["save-and-pr"]
-  save --> pr["Target Repo PR"]
+```bash
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
 ```
 
-## CI/CD
+Taskfile は Rust CLI の薄いラッパーとして使える:
 
-```mermaid
-graph TB
-  subgraph CI["CI (push / PR)"]
-    direction LR
-    rust["Rust Check<br/>fmt, clippy, test"]
-    shell["Shell Lint<br/>shellcheck, bats"]
-  end
-
-  subgraph Release["Release (v* tag)"]
-    direction LR
-    build["Build<br/>linux / windows / macOS"]
-    gh_release["GitHub Release<br/>+ binaries"]
-    build --> gh_release
-  end
+```bash
+task fetch URL=https://example.com/article
+task translate
+task check
 ```
+
+## Release
+
+`main` 宛の PR が merge されると `.github/workflows/release.yml` が実行される。
+通常の PR merge では release-please が Release PR を作成・更新し、Release PR が merge されると GitHub Release と各 OS 向け asset が作成される。
 
 詳細: [docs/ci-cd/README.md](docs/ci-cd/README.md)
 
-## Testing
-
-```bash
-# Rust
-cargo test              # ユニットテスト (56 tests)
-cargo clippy            # lint
-cargo fmt --check       # フォーマット
-
-# Shell (レガシー)
-task lint               # shellcheck
-task test               # bats
-```
-
-## Development
-
-### devcontainer
-
-VS Code / GitHub Codespaces の devcontainer 対応済み。Rust toolchain, gh CLI, go-task 等が自動セットアップされる。
-
-```bash
-# devcontainer 起動後
-gh auth login
-.github/setup-git.sh
-```
-
-### Project Management
-
-- Issue tracking: [Linear (ArticleCollector)](https://linear.app/life-style-base/project/articlecollector-5d3a0da1c15c)
-- ガイド: [docs/linear/README.md](docs/linear/README.md), [docs/pr/README.md](docs/pr/README.md)
-
 ## Troubleshooting
 
-### Windows: `/tmp/collect` が見つからない
+### `cargo` が見つからない
 
-本ツールは一時ディレクトリとして `/tmp/collect` を使用します。ネイティブの Windows コマンドプロンプトや PowerShell では `/tmp` が存在しないため、以下のいずれかで実行してください:
-
-- **Git Bash**: MSYS2 レイヤーにより `/tmp` パスが利用可能です
-- **WSL**: Linux と同じパスが使えます
-
-### `gh auth login` が必要
-
-`save-and-pr` サブコマンドは `gh` CLI を使って PR を作成します。初回は認証が必要です:
+Rust toolchain をインストールしてから、新しい shell を開き直す。
 
 ```bash
-gh auth login
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
 ```
 
-### Claude Code で翻訳する場合
+Windows では `winget install Rustlang.Rustup` 後に PowerShell を開き直す。
 
-`LLM_API_URL=claude-code` を設定すると、ローカルにインストールされた Claude Code CLI (`claude -p`) を呼び出して翻訳します。事前に Claude Code がインストール・認証済みであることを確認してください。
+### Release download が失敗する
+
+GitHub Release がまだ作成されていない場合、`gh release download ...` は使えない。
+その場合は `cargo install --git https://github.com/rurusasu/article-collector --locked` を使う。
+
+### `gh article-collector` として使いたい
+
+現在の構成は通常の CLI (`article-collector`) 用。
+GitHub CLI extension として `gh article-collector ...` で使うには、別途 `gh-article-collector` 名の実行ファイルまたは GitHub CLI extension 用の repo 構成が必要。
 
 ## License
 

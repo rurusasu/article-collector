@@ -6,11 +6,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const OUTDIR: &str = "/tmp/collect";
+use crate::paths;
 
 pub fn save_and_pr(url: &str) -> Result<()> {
     let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
-    let target_dir = std::env::var("TARGET_DIR").unwrap_or_else(|_| "/tmp/target-repo".to_string());
+    let target_dir = std::env::var("TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| paths::default_target_dir());
     let save_path_template =
         std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
     let auto_merge = std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string());
@@ -25,7 +27,8 @@ pub fn save_and_pr(url: &str) -> Result<()> {
     let article_type = determine_type(url);
 
     // Extract title from raw.json
-    let raw_path = Path::new(OUTDIR).join("raw.json");
+    let outdir = paths::outdir();
+    let raw_path = outdir.join("raw.json");
     let raw = fs::read_to_string(&raw_path).context("Failed to read raw.json")?;
     let data: Value = serde_json::from_str(&raw)?;
 
@@ -50,15 +53,15 @@ pub fn save_and_pr(url: &str) -> Result<()> {
 
     let filename = format!("{now}_{slug}.md");
     let save_path = save_path_template.replace("${TYPE}", &article_type);
-    let dest_dir = PathBuf::from(&target_dir).join(&save_path);
+    let dest_dir = target_dir.join(&save_path);
 
     // Clone or update target repo
-    let target_path = Path::new(&target_dir);
-    if target_path.join(".git").exists() {
+    if target_dir.join(".git").exists() {
         run_git(&target_dir, &["checkout", "main"])?;
         run_git(&target_dir, &["pull", "origin", "main"])?;
     } else {
-        run_cmd("gh", &["repo", "clone", &target_repo, &target_dir])?;
+        let target_dir_arg = target_dir.to_string_lossy().to_string();
+        run_cmd("gh", &["repo", "clone", &target_repo, &target_dir_arg])?;
     }
 
     // Create branch
@@ -72,7 +75,7 @@ pub fn save_and_pr(url: &str) -> Result<()> {
         "---\ntitle: \"{title}\"\ntype: {article_type}\nurl: \"{url}\"\ncreated: {now}\ntags: []\n---\n\n"
     );
 
-    let translated_path = Path::new(OUTDIR).join("translated.md");
+    let translated_path = paths::translated_md_path();
     let translated = fs::read_to_string(&translated_path).unwrap_or_default();
 
     // Validate
@@ -83,7 +86,7 @@ pub fn save_and_pr(url: &str) -> Result<()> {
     let mut content = format!("{frontmatter}{translated}");
 
     // Append embedded translated articles
-    if let Ok(entries) = fs::read_dir(OUTDIR) {
+    if let Ok(entries) = fs::read_dir(&outdir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("embedded_") && name.ends_with("_translated.md") {
@@ -161,7 +164,7 @@ pub fn determine_type(url: &str) -> String {
     }
 }
 
-fn run_git(dir: &str, args: &[&str]) -> Result<()> {
+fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
     run_cmd_in(dir, "git", args)
 }
 
@@ -173,7 +176,7 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn run_cmd_in(dir: &str, cmd: &str, args: &[&str]) -> Result<()> {
+fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(cmd).current_dir(dir).args(args).status()?;
     if !status.success() {
         bail!("{cmd} {} failed with {status}", args.join(" "));

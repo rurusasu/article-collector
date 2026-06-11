@@ -1,8 +1,10 @@
-name: Release Please
+name: Release
 
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -13,16 +15,20 @@ env:
 
 jobs:
   release-please:
-    name: Create Release PR / Tag
+    name: Create Release PR / Release
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
+      - uses: actions/checkout@v4
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          release-type: rust
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
 
   build:
     name: Build (${{ matrix.target }})
@@ -50,6 +56,8 @@ jobs:
             artifact: article-collector-macos-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -68,7 +76,7 @@ jobs:
 
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Configure linker for aarch64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -90,11 +98,10 @@ jobs:
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
-        run: |
-          cp target/${{ matrix.target }}/release/article-collector.exe ${{ matrix.artifact }}
         shell: bash
+        run: cp target/${{ matrix.target }}/release/article-collector.exe ${{ matrix.artifact }}
 
       - name: Upload release asset
-        run: gh release upload ${{ needs.release-please.outputs.tag_name }} ${{ matrix.artifact }}
+        run: gh release upload ${{ needs.release-please.outputs.tag_name }} ${{ matrix.artifact }} --clobber
         env:
           GH_TOKEN: ${{ github.token }}

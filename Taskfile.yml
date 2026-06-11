@@ -1,57 +1,95 @@
 version: "3"
 
-vars:
-  SCRIPTS_DIR: '{{.TASKFILE_DIR}}/scripts'
-
 tasks:
+  default:
+    desc: "利用可能な task を表示"
+    cmds:
+      - task --list
+
   collect:
-    desc: "記事取得 → 翻訳 → 保存 → PR"
+    desc: "Rust CLI で 記事取得 -> 翻訳 -> 保存 -> PR を実行"
     requires:
       vars: [URL]
     preconditions:
-      - sh: command -v curl
-        msg: "curl is required"
-      - sh: command -v jq
-        msg: "jq is required"
-      - sh: command -v python3
-        msg: "python3 is required"
+      - sh: command -v cargo
+        msg: "cargo is required"
+      - sh: command -v git
+        msg: "git is required"
+      - sh: command -v gh
+        msg: "gh CLI is required for save-and-pr"
+    cmds:
+      - cargo run --locked -- collect "{{.URL}}"
+
+  fetch:
+    desc: "Rust CLI で URL から記事を取得"
+    requires:
+      vars: [URL]
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo is required"
+    cmds:
+      - cargo run --locked -- fetch "{{.URL}}"
+
+  translate:
+    desc: "Rust CLI で取得済み JSON を翻訳"
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo is required"
+    cmds:
+      - cargo run --locked -- translate {{if .INPUT}}"{{.INPUT}}"{{end}}
+
+  save-and-pr:
+    desc: "Rust CLI で翻訳記事を保存して PR 作成"
+    requires:
+      vars: [URL]
+    preconditions:
+      - sh: command -v cargo
+        msg: "cargo is required"
       - sh: command -v git
         msg: "git is required"
       - sh: command -v gh
         msg: "gh CLI is required"
     cmds:
-      - task: fetch
-      - task: translate
-      - task: save-and-pr
+      - cargo run --locked -- save-and-pr "{{.URL}}"
 
-  fetch:
-    desc: "URL から記事を取得"
-    requires:
-      vars: [URL]
+  install:
+    desc: "ローカル checkout から article-collector をインストール"
     cmds:
-      - bash {{.SCRIPTS_DIR}}/fetch-article.sh "{{.URL}}"
+      - cargo install --path . --locked
 
-  translate:
-    desc: "取得した記事を翻訳"
+  fmt:
+    desc: "Rust formatting を検証"
     cmds:
-      - bash {{.SCRIPTS_DIR}}/translate.sh /tmp/collect/raw.json
+      - cargo fmt --check
 
-  save-and-pr:
-    desc: "翻訳記事を保存して PR 作成"
-    requires:
-      vars: [URL]
+  clippy:
+    desc: "Rust lint を実行"
     cmds:
-      - bash {{.SCRIPTS_DIR}}/save-and-pr.sh "{{.URL}}"
-
-  lint:
-    desc: "shellcheck でスクリプトを検証"
-    cmds:
-      - shellcheck scripts/*.sh
+      - cargo clippy --all-targets -- -D warnings
 
   test:
-    desc: "bats でユニットテストを実行"
+    desc: "Rust unit tests を実行"
     cmds:
-      - bats tests/
+      - cargo test --locked
+
+  build:
+    desc: "release build を検証"
+    cmds:
+      - cargo build --release --locked
+
+  lint:
+    desc: "Rust と検証スクリプトを lint"
+    cmds:
+      - task: fmt
+      - task: clippy
+      - shellcheck scripts/verify-pr.sh scripts/verify-rules.sh scripts/wait-ci.sh
+
+  check:
+    desc: "CI 相当のローカル検証"
+    cmds:
+      - task: lint
+      - task: test
+      - task: build
 
   verify-pr:
     desc: "PR チェックリストを自動検証"
@@ -61,9 +99,9 @@ tasks:
       - sh: command -v gh
         msg: "gh CLI is required"
     cmds:
-      - bash {{.SCRIPTS_DIR}}/verify-pr.sh {{.PR_NUMBER}}
+      - bash scripts/verify-pr.sh {{.PR_NUMBER}}
 
   verify-local:
     desc: "PR なしで全ルールをローカル実行"
     cmds:
-      - bash {{.SCRIPTS_DIR}}/verify-pr.sh --local
+      - bash scripts/verify-pr.sh --local
