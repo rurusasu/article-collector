@@ -46,8 +46,11 @@ async fn main() -> Result<()> {
     match cli.command {
         Commands::Collect { ref url } => {
             fetch::fetch_url(url).await?;
-            translate::translate(&paths::raw_json_path()).await?;
-            save::save_and_pr(url)?;
+            if translate::translate(&paths::raw_json_path()).await?
+                == translate::TranslateOutcome::Translated
+            {
+                save::save_and_pr(url)?;
+            }
         }
         Commands::Fetch { ref url } => {
             fetch::fetch_url(url).await?;
