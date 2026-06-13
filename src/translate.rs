@@ -6,26 +6,123 @@ use std::process::Command;
 
 use crate::paths;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum LlmProvider {
     OpenAI,
     Anthropic,
     ClaudeCode,
 }
 
-pub fn detect_provider(api_url: &str) -> LlmProvider {
-    if api_url == "claude-code" {
-        LlmProvider::ClaudeCode
-    } else if api_url.contains("anthropic.com") {
-        LlmProvider::Anthropic
-    } else {
-        LlmProvider::OpenAI
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApiTokenRule {
+    env_var: &'static str,
+    prefix: &'static str,
+    min_chars: usize,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ModelConfig {
+    env_var: &'static str,
+    default_model: &'static str,
+}
+
+impl LlmProvider {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "openai" => Ok(LlmProvider::OpenAI),
+            "anthropic" => Ok(LlmProvider::Anthropic),
+            "claude-code" | "claude_code" => Ok(LlmProvider::ClaudeCode),
+            other => bail!(
+                "Unsupported LLM_PROVIDER '{other}'. Use one of: openai, anthropic, claude-code"
+            ),
+        }
+    }
+
+    fn from_env() -> Result<Self> {
+        let provider = std::env::var("LLM_PROVIDER").unwrap_or_else(|_| "claude-code".to_string());
+        Self::parse(&provider)
+    }
+
+    pub fn api_endpoint(self) -> Option<&'static str> {
+        match self {
+            LlmProvider::OpenAI => Some("https://api.openai.com/v1/chat/completions"),
+            LlmProvider::Anthropic => Some("https://api.anthropic.com/v1/messages"),
+            LlmProvider::ClaudeCode => None,
+        }
+    }
+
+    pub fn token_rule(self) -> Option<ApiTokenRule> {
+        match self {
+            LlmProvider::OpenAI => Some(ApiTokenRule {
+                env_var: "OPENAI_API_KEY",
+                prefix: "sk-proj-",
+                min_chars: 40,
+            }),
+            LlmProvider::Anthropic => Some(ApiTokenRule {
+                env_var: "ANTHROPIC_API_KEY",
+                prefix: "sk-ant-api03-",
+                min_chars: 40,
+            }),
+            LlmProvider::ClaudeCode => None,
+        }
+    }
+
+    pub fn model_config(self) -> Option<ModelConfig> {
+        match self {
+            LlmProvider::OpenAI => Some(ModelConfig {
+                env_var: "OPENAI_MODEL",
+                default_model: "gpt-4o",
+            }),
+            LlmProvider::Anthropic => Some(ModelConfig {
+                env_var: "ANTHROPIC_MODEL",
+                default_model: "claude-sonnet-4-20250514",
+            }),
+            LlmProvider::ClaudeCode => None,
+        }
+    }
+
+    fn api_token(self) -> Result<Option<String>> {
+        let Some(rule) = self.token_rule() else {
+            return Ok(None);
+        };
+        let token = std::env::var(rule.env_var)
+            .with_context(|| format!("{} env var required", rule.env_var))?;
+        rule.validate(&token)?;
+        Ok(Some(token))
+    }
+
+    fn model(self) -> Option<String> {
+        let config = self.model_config()?;
+        Some(std::env::var(config.env_var).unwrap_or_else(|_| config.default_model.to_string()))
+    }
+}
+
+impl ApiTokenRule {
+    pub fn validate(&self, token: &str) -> Result<()> {
+        if !token.starts_with(self.prefix) {
+            bail!(
+                "{} must start with '{}' for the selected provider",
+                self.env_var,
+                self.prefix
+            );
+        }
+
+        let char_count = token.chars().count();
+        if char_count < self.min_chars {
+            bail!(
+                "{} must be at least {} characters long; got {}",
+                self.env_var,
+                self.min_chars,
+                char_count
+            );
+        }
+
+        Ok(())
     }
 }
 
 pub async fn translate(input: &Path) -> Result<()> {
-    let api_url = std::env::var("LLM_API_URL").unwrap_or_else(|_| "claude-code".to_string());
-    let provider = detect_provider(&api_url);
+    let provider = LlmProvider::from_env()?;
     let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
 
     // Extract content from input JSON
@@ -38,7 +135,7 @@ pub async fn translate(input: &Path) -> Result<()> {
     }
 
     // Translate main content
-    let translated = translate_text(&provider, &api_url, &lang, &content).await?;
+    let translated = translate_text(&provider, &lang, &content).await?;
     let outdir = paths::outdir();
     fs::create_dir_all(&outdir)?;
     let translated_path = paths::translated_md_path();
@@ -58,8 +155,7 @@ pub async fn translate(input: &Path) -> Result<()> {
                     continue;
                 }
 
-                let emb_translated =
-                    translate_text(&provider, &api_url, &lang, &emb_content).await?;
+                let emb_translated = translate_text(&provider, &lang, &emb_content).await?;
                 let emb_path = outdir.join(format!("{basename}_translated.md"));
                 fs::write(emb_path, emb_translated)?;
             }
@@ -70,12 +166,7 @@ pub async fn translate(input: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn translate_text(
-    provider: &LlmProvider,
-    api_url: &str,
-    lang: &str,
-    content: &str,
-) -> Result<String> {
+async fn translate_text(provider: &LlmProvider, lang: &str, content: &str) -> Result<String> {
     let prompt = format!(
         "以下の記事を{lang}に翻訳してください。Markdown形式を維持し、技術用語は適切に翻訳してください。翻訳結果のみを出力してください。\n\n{content}"
     );
@@ -83,16 +174,17 @@ async fn translate_text(
     match provider {
         LlmProvider::ClaudeCode => call_claude_code(&prompt),
         LlmProvider::Anthropic | LlmProvider::OpenAI => {
-            let api_token =
-                std::env::var("LLM_API_TOKEN").context("LLM_API_TOKEN env var required")?;
-            let default_model = match provider {
-                LlmProvider::Anthropic => "claude-sonnet-4-20250514",
-                _ => "gpt-4o",
-            };
-            let model = std::env::var("LLM_MODEL").unwrap_or_else(|_| default_model.to_string());
-            let endpoint = resolve_endpoint(api_url, provider);
+            let api_token = provider
+                .api_token()?
+                .context("API token config missing for API provider")?;
+            let model = provider
+                .model()
+                .context("Model config missing for API provider")?;
+            let endpoint = provider
+                .api_endpoint()
+                .context("API endpoint config missing for API provider")?;
             let client = reqwest::Client::new();
-            call_llm_api(&client, &endpoint, &api_token, &model, &prompt, provider).await
+            call_llm_api(&client, endpoint, &api_token, &model, &prompt, provider).await
         }
     }
 }
@@ -166,28 +258,6 @@ fn augmented_path() -> std::ffi::OsString {
     }
 
     std::env::join_paths(paths).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
-}
-
-pub fn resolve_endpoint(api_url: &str, provider: &LlmProvider) -> String {
-    match provider {
-        LlmProvider::Anthropic => {
-            if api_url.ends_with("/messages") {
-                api_url.to_string()
-            } else {
-                let base = api_url.trim_end_matches('/');
-                format!("{base}/v1/messages")
-            }
-        }
-        LlmProvider::OpenAI => {
-            if api_url.ends_with("/chat/completions") {
-                api_url.to_string()
-            } else {
-                let base = api_url.trim_end_matches('/');
-                format!("{base}/chat/completions")
-            }
-        }
-        LlmProvider::ClaudeCode => String::new(),
-    }
 }
 
 pub fn extract_content(data: &Value) -> String {
@@ -287,121 +357,158 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── detect_provider ──
+    // ── LlmProvider ──
 
-    /// 検証: "claude-code" 文字列を ClaudeCode プロバイダーとして検出する
+    /// 検証: LLM_PROVIDER の "claude-code" を ClaudeCode プロバイダーとして解釈する
     /// 理由: Claude Code CLI はローカル実行で HTTP API とは異なる呼び出し方法を使う
     /// リスク: Claude Code が HTTP API として呼び出され、接続エラーになる
     #[test]
-    fn detects_claude_code_provider() {
-        assert_eq!(detect_provider("claude-code"), LlmProvider::ClaudeCode);
+    fn parses_claude_code_provider() {
+        assert_eq!(
+            LlmProvider::parse("claude-code").unwrap(),
+            LlmProvider::ClaudeCode
+        );
     }
 
-    /// 検証: Anthropic API URL を正しく検出する
+    /// 検証: LLM_PROVIDER の "anthropic" を Anthropic プロバイダーとして解釈する
     /// 理由: Anthropic は独自の API フォーマット（messages API）を使う
     /// リスク: Anthropic API に OpenAI フォーマットのリクエストを送信し、400 エラーになる
     #[test]
-    fn detects_anthropic_provider() {
+    fn parses_anthropic_provider() {
         assert_eq!(
-            detect_provider("https://api.anthropic.com"),
+            LlmProvider::parse("anthropic").unwrap(),
             LlmProvider::Anthropic
         );
     }
 
-    /// 検証: OpenAI API URL を正しく検出する
+    /// 検証: LLM_PROVIDER の "openai" を OpenAI プロバイダーとして解釈する
     /// 理由: OpenAI は chat/completions エンドポイントを使う
     /// リスク: OpenAI API に Anthropic フォーマットのリクエストを送信し、エラーになる
     #[test]
-    fn detects_openai_provider() {
-        assert_eq!(
-            detect_provider("https://api.openai.com/v1"),
-            LlmProvider::OpenAI
-        );
+    fn parses_openai_provider() {
+        assert_eq!(LlmProvider::parse("openai").unwrap(), LlmProvider::OpenAI);
     }
 
-    /// 検証: 未知の URL を OpenAI 互換プロバイダーとしてフォールバックする
-    /// 理由: ローカル LLM サーバー等は OpenAI 互換 API を提供することが多い
-    /// リスク: 未知の URL でパニックが発生し、翻訳が全く動作しない
+    /// 検証: 未知の provider 名を拒否する
+    /// 理由: URL 文字列からの暗黙 fallback をなくし、設定ミスを早期に検出する
+    /// リスク: 意図しない provider として実行され、別 API に誤送信される
     #[test]
-    fn detects_generic_as_openai() {
-        assert_eq!(
-            detect_provider("http://localhost:8080"),
-            LlmProvider::OpenAI
-        );
+    fn rejects_unknown_provider() {
+        assert!(LlmProvider::parse("http://localhost:8080").is_err());
     }
 
-    // ── resolve_endpoint ──
+    // ── provider config ──
 
-    /// 検証: 既に /chat/completions を含む URL をそのまま返す
-    /// 理由: 完全な URL が指定された場合、パスを二重付与しない
-    /// リスク: "/chat/completions/chat/completions" のような不正 URL になる
+    /// 検証: OpenAI の endpoint は provider enum の固定値として定義される
+    /// 理由: provider 選択と API endpoint を別概念として扱う
+    /// リスク: 無効な URL 指定で翻訳が失敗する
     #[test]
-    fn openai_endpoint_already_has_chat_completions() {
+    fn openai_endpoint_is_fixed() {
         assert_eq!(
-            resolve_endpoint(
-                "http://localhost:8080/chat/completions",
-                &LlmProvider::OpenAI
-            ),
-            "http://localhost:8080/chat/completions"
+            LlmProvider::OpenAI.api_endpoint(),
+            Some("https://api.openai.com/v1/chat/completions")
         );
     }
 
-    /// 検証: 末尾スラッシュ付き URL に /chat/completions を正しく付与する
-    /// 理由: "v1/" と "v1" の両方に対応する必要がある
-    /// リスク: "/v1//chat/completions" のようなダブルスラッシュが発生する
+    /// 検証: Anthropic の endpoint は provider enum の固定値として定義される
+    /// 理由: 公式 API の endpoint をユーザー設定に委ねない
+    /// リスク: messages API 以外へ送信され、API 呼び出しが失敗する
     #[test]
-    fn openai_endpoint_with_v1_trailing_slash() {
+    fn anthropic_endpoint_is_fixed() {
         assert_eq!(
-            resolve_endpoint("http://localhost:8080/v1/", &LlmProvider::OpenAI),
-            "http://localhost:8080/v1/chat/completions"
+            LlmProvider::Anthropic.api_endpoint(),
+            Some("https://api.anthropic.com/v1/messages")
         );
     }
 
-    /// 検証: パスなしの URL に /chat/completions を付与する
-    /// 理由: ベース URL のみが指定される場合がある
-    /// リスク: ルート URL にリクエストが送信され、404 エラーになる
-    #[test]
-    fn openai_endpoint_bare_url() {
-        assert_eq!(
-            resolve_endpoint("http://localhost:8080", &LlmProvider::OpenAI),
-            "http://localhost:8080/chat/completions"
-        );
-    }
-
-    /// 検証: 既に /v1/messages を含む Anthropic URL をそのまま返す
-    /// 理由: 完全な URL が指定された場合、パスを二重付与しない
-    /// リスク: "/v1/messages/v1/messages" のような不正 URL になる
-    #[test]
-    fn anthropic_endpoint_already_has_messages() {
-        assert_eq!(
-            resolve_endpoint(
-                "https://api.anthropic.com/v1/messages",
-                &LlmProvider::Anthropic
-            ),
-            "https://api.anthropic.com/v1/messages"
-        );
-    }
-
-    /// 検証: パスなしの Anthropic URL に /v1/messages を付与する
-    /// 理由: ベース URL のみが指定される場合がある
-    /// リスク: ルート URL にリクエストが送信され、404 エラーになる
-    #[test]
-    fn anthropic_endpoint_bare_url() {
-        assert_eq!(
-            resolve_endpoint("https://api.anthropic.com", &LlmProvider::Anthropic),
-            "https://api.anthropic.com/v1/messages"
-        );
-    }
-
-    /// 検証: Claude Code プロバイダーのエンドポイントは空文字列を返す
+    /// 検証: Claude Code は HTTP endpoint を持たない
     /// 理由: Claude Code は CLI 経由で呼び出すため、HTTP エンドポイントは不要
-    /// リスク: 空でない URL が返され、HTTP リクエストが誤って送信される
+    /// リスク: HTTP リクエストが誤って送信される
     #[test]
-    fn claude_code_endpoint_is_empty() {
+    fn claude_code_endpoint_is_none() {
+        assert_eq!(LlmProvider::ClaudeCode.api_endpoint(), None);
+    }
+
+    /// 検証: OpenAI の token 設定は provider 固有の env var と prefix を持つ
+    /// 理由: provider ごとの API key 形式を明示する
+    /// リスク: 別 provider の token を OpenAI に送信する
+    #[test]
+    fn openai_token_rule_is_provider_specific() {
         assert_eq!(
-            resolve_endpoint("claude-code", &LlmProvider::ClaudeCode),
-            ""
+            LlmProvider::OpenAI.token_rule(),
+            Some(ApiTokenRule {
+                env_var: "OPENAI_API_KEY",
+                prefix: "sk-proj-",
+                min_chars: 40
+            })
         );
+    }
+
+    /// 検証: Anthropic の token 設定は provider 固有の env var と prefix を持つ
+    /// 理由: provider ごとの API key 形式を明示する
+    /// リスク: 別 provider の token を Anthropic に送信する
+    #[test]
+    fn anthropic_token_rule_is_provider_specific() {
+        assert_eq!(
+            LlmProvider::Anthropic.token_rule(),
+            Some(ApiTokenRule {
+                env_var: "ANTHROPIC_API_KEY",
+                prefix: "sk-ant-api03-",
+                min_chars: 40
+            })
+        );
+    }
+
+    /// 検証: OpenAI token は prefix と文字数の両方を満たす必要がある
+    /// 理由: provider を間違えた token や途中で欠けた token を早期検出する
+    /// リスク: API 呼び出し後まで設定ミスに気づけない
+    #[test]
+    fn validates_openai_token_prefix_and_length() {
+        let rule = LlmProvider::OpenAI.token_rule().unwrap();
+        assert!(rule
+            .validate("sk-proj-abcdefghijklmnopqrstuvwxyz123456")
+            .is_ok());
+        assert!(rule
+            .validate("sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456")
+            .is_err());
+        assert!(rule.validate("sk-proj-short").is_err());
+    }
+
+    /// 検証: Anthropic token は prefix と文字数の両方を満たす必要がある
+    /// 理由: provider を間違えた token や途中で欠けた token を早期検出する
+    /// リスク: API 呼び出し後まで設定ミスに気づけない
+    #[test]
+    fn validates_anthropic_token_prefix_and_length() {
+        let rule = LlmProvider::Anthropic.token_rule().unwrap();
+        assert!(rule
+            .validate("sk-ant-api03-abcdefghijklmnopqrstuvwxyz123456")
+            .is_ok());
+        assert!(rule
+            .validate("sk-proj-abcdefghijklmnopqrstuvwxyz123456")
+            .is_err());
+        assert!(rule.validate("sk-ant-api03-short").is_err());
+    }
+
+    /// 検証: provider ごとに model env var と default model を持つ
+    /// 理由: 共通 model env var では provider 切替時に不正な model を指定しやすい
+    /// リスク: OpenAI 用 model を Anthropic に渡す等の設定事故が起きる
+    #[test]
+    fn model_config_is_provider_specific() {
+        assert_eq!(
+            LlmProvider::OpenAI.model_config(),
+            Some(ModelConfig {
+                env_var: "OPENAI_MODEL",
+                default_model: "gpt-4o"
+            })
+        );
+        assert_eq!(
+            LlmProvider::Anthropic.model_config(),
+            Some(ModelConfig {
+                env_var: "ANTHROPIC_MODEL",
+                default_model: "claude-sonnet-4-20250514"
+            })
+        );
+        assert_eq!(LlmProvider::ClaudeCode.model_config(), None);
     }
 
     // ── extract_content (array) ──
