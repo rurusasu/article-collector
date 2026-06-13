@@ -2,7 +2,7 @@
 
 URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツール。
 
-OpenAI API / Anthropic API / Claude Code CLI で翻訳できる。
+ACP agent 経由で翻訳できる。
 
 ## セットアップ
 
@@ -64,7 +64,7 @@ sequenceDiagram
     actor User
     participant CLI as article-collector
     participant Fetch as fetch
-    participant LLM as LLM provider
+    participant LLM as ACP agent
     participant Save as save-and-pr
     participant GitHub as GitHub
 
@@ -83,7 +83,7 @@ sequenceDiagram
 
 ## クイックスタート
 
-fetch のみなら翻訳 API や GitHub 認証なしで試せる。
+fetch のみなら翻訳 agent や GitHub 認証なしで試せる。
 
 ```bash
 article-collector fetch https://news.ycombinator.com/item?id=42575537
@@ -91,31 +91,20 @@ article-collector fetch https://news.ycombinator.com/item?id=42575537
 
 全工程を実行する場合:
 
-OpenAI API を使う場合:
+Codex を ACP 経由で使う場合:
 
 ```bash
-export LLM_PROVIDER="openai"
-export OPENAI_API_KEY="sk-proj-<your-openai-api-key>"
+codex login
+export ACP_AGENT="codex"
 export TARGET_REPO="your-org/your-repo"
 
 article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
 
-Anthropic API を使う場合:
+Codex 以外の agent を使う場合だけ、`ACP_AGENT` に短い名前を指定する:
 
 ```bash
-export LLM_PROVIDER="anthropic"
-export ANTHROPIC_API_KEY="sk-ant-api03-<your-anthropic-api-key>"
-export TARGET_REPO="your-org/your-repo"
-
-article-collector collect https://news.ycombinator.com/item?id=42575537
-```
-
-Claude Code CLI を個人のローカル環境で使う場合:
-
-```bash
-export LLM_PROVIDER="claude-code"
-article-collector collect https://example.com/article
+export ACP_AGENT="gemini"
 ```
 
 ## コマンド一覧
@@ -132,53 +121,36 @@ article-collector collect https://example.com/article
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ARTICLE_COLLECTOR_OUTDIR` | No | OS 依存 | `raw.json` / `translated.md` の保存先 |
-| `LLM_PROVIDER` | No | `claude-code` | 翻訳 provider。`openai` / `anthropic` / `claude-code` |
-| `OPENAI_API_KEY` | Yes* | - | `LLM_PROVIDER=openai` の API key。`sk-proj-` prefix かつ 40 文字以上で検証 |
-| `ANTHROPIC_API_KEY` | Yes* | - | `LLM_PROVIDER=anthropic` の API key。`sk-ant-api03-` prefix かつ 40 文字以上で検証 |
-| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI 翻訳に使うモデル |
-| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Anthropic 翻訳に使うモデル |
+| `ACP_AGENT` | Yes* | - | 内蔵 mapping から選ぶ ACP agent。`codex` / `gemini` / `claude` |
 | `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
 | `TARGET_REPO` | Yes** | - | 保存先 GitHub リポジトリ (`owner/repo`) |
 | `TARGET_DIR` | No | OS 依存 | 保存先 repo のローカル clone 先 |
 | `SAVE_PATH_TEMPLATE` | No | `articles/${TYPE}/` | 保存先パステンプレート |
 | `AUTO_MERGE` | No | `true` | PR 作成後に merge する |
 
-\* `LLM_PROVIDER=claude-code` の場合は不要。
+\* 未指定または空文字の場合、翻訳は実行されず `translated.md` は作成されない。`collect` は保存/PR 作成に進まない。
 \*\* `save-and-pr` / `collect` の保存ステップのみ必要。
 
-### 対応 provider
+### ACP agent 利用時の注意
 
-| `LLM_PROVIDER` | 呼び出し方式 | 必須 env | 任意 env | Token validation |
-|----------------|--------------|----------|----------|------------------|
-| `openai` | OpenAI Chat Completions API | `OPENAI_API_KEY` | `OPENAI_MODEL` | `sk-proj-` prefix かつ 40 文字以上 |
-| `anthropic` | Anthropic Messages API | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | `sk-ant-api03-` prefix かつ 40 文字以上 |
-| `claude-code` | Claude Code CLI (`claude -p`) | なし | なし | なし |
+`article-collector` は `ACP_AGENT` の内蔵 mapping で解決した agent を subprocess として起動し、ACP v1 の `initialize`、`session/new`、`session/prompt` を使う。
+article-collector は翻訳用途の client として動作するため、file system / terminal capability は広告しない。
+agent から `session/request_permission` が来た場合は `cancelled` で応答する。
 
-OpenAI / Anthropic の API endpoint は provider ごとに内部で固定しているため、API URL を環境変数で指定する必要はない:
+内蔵 mapping:
 
-| Provider | Endpoint |
-|----------|----------|
-| `openai` | `https://api.openai.com/v1/chat/completions` |
-| `anthropic` | `https://api.anthropic.com/v1/messages` |
+| `ACP_AGENT` | Command |
+|-------------|---------|
+| `codex` | `npx -y @agentclientprotocol/codex-acp` |
+| `gemini` | `gemini --acp` |
+| `claude` | `npx -y @agentclientprotocol/claude-agent-acp` |
 
-### Claude Code CLI 利用時の注意
-
-翻訳そのものは Claude の一般用途として扱われているが、`LLM_PROVIDER=claude-code` は非対話の `claude -p` 実行になる。
-Claude subscription plan で使う場合、2026-06-15 以降は Agent SDK monthly credit の対象になる。
-credit を超えると、usage credits が有効なら標準 API rate で継続し、無効なら credit 更新まで停止する。
-
-個人のローカル実行や開発補助には使えるが、第三者ユーザーのリクエストを Free / Pro / Max plan の認証情報へ流す用途には使わない。
-共有サービス、本番バッチ、チームでの継続的な自動化では、Anthropic API key などの公式 API key を使う:
-
-```bash
-export LLM_PROVIDER="anthropic"
-export ANTHROPIC_API_KEY="sk-ant-api03-<your-anthropic-api-key>"
-```
+共有サービス、本番バッチ、チームでの継続的な自動化では、利用する ACP agent の認証方式、課金、利用規約を確認する。
 
 参考:
 
-- [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)
-- [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+- [Agent Client Protocol](https://agentclientprotocol.com/)
+- [ACP agents](https://agentclientprotocol.com/get-started/agents)
 
 `save-and-pr` は `gh` CLI を使うため、事前に認証が必要:
 
