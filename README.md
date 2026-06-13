@@ -2,7 +2,7 @@
 
 URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツール。
 
-任意の OpenAI 互換 API / Anthropic API / Claude Code CLI で翻訳できる。
+OpenAI API / Anthropic API / Claude Code CLI で翻訳できる。
 
 ## セットアップ
 
@@ -91,9 +91,21 @@ article-collector fetch https://news.ycombinator.com/item?id=42575537
 
 全工程を実行する場合:
 
+OpenAI API を使う場合:
+
 ```bash
-export LLM_API_URL="https://api.openai.com/v1"
-export LLM_API_TOKEN="sk-..."
+export LLM_PROVIDER="openai"
+export OPENAI_API_KEY="sk-proj-<your-openai-api-key>"
+export TARGET_REPO="your-org/your-repo"
+
+article-collector collect https://news.ycombinator.com/item?id=42575537
+```
+
+Anthropic API を使う場合:
+
+```bash
+export LLM_PROVIDER="anthropic"
+export ANTHROPIC_API_KEY="sk-ant-api03-<your-anthropic-api-key>"
 export TARGET_REPO="your-org/your-repo"
 
 article-collector collect https://news.ycombinator.com/item?id=42575537
@@ -102,7 +114,7 @@ article-collector collect https://news.ycombinator.com/item?id=42575537
 Claude Code CLI を個人のローカル環境で使う場合:
 
 ```bash
-export LLM_API_URL="claude-code"
+export LLM_PROVIDER="claude-code"
 article-collector collect https://example.com/article
 ```
 
@@ -120,30 +132,47 @@ article-collector collect https://example.com/article
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `ARTICLE_COLLECTOR_OUTDIR` | No | OS 依存 | `raw.json` / `translated.md` の保存先 |
-| `LLM_API_URL` | No | `claude-code` | API エンドポイント。`claude-code` で Claude Code CLI (`claude -p`) 使用 |
-| `LLM_API_TOKEN` | Yes* | - | API 認証トークン |
-| `LLM_MODEL` | No | provider 依存 | 翻訳に使うモデル |
+| `LLM_PROVIDER` | No | `claude-code` | 翻訳 provider。`openai` / `anthropic` / `claude-code` |
+| `OPENAI_API_KEY` | Yes* | - | `LLM_PROVIDER=openai` の API key。`sk-proj-` prefix かつ 40 文字以上で検証 |
+| `ANTHROPIC_API_KEY` | Yes* | - | `LLM_PROVIDER=anthropic` の API key。`sk-ant-api03-` prefix かつ 40 文字以上で検証 |
+| `OPENAI_MODEL` | No | `gpt-4o` | OpenAI 翻訳に使うモデル |
+| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Anthropic 翻訳に使うモデル |
 | `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
 | `TARGET_REPO` | Yes** | - | 保存先 GitHub リポジトリ (`owner/repo`) |
 | `TARGET_DIR` | No | OS 依存 | 保存先 repo のローカル clone 先 |
 | `SAVE_PATH_TEMPLATE` | No | `articles/${TYPE}/` | 保存先パステンプレート |
 | `AUTO_MERGE` | No | `true` | PR 作成後に merge する |
 
-\* `LLM_API_URL=claude-code` の場合は不要。
+\* `LLM_PROVIDER=claude-code` の場合は不要。
 \*\* `save-and-pr` / `collect` の保存ステップのみ必要。
+
+### 対応 provider
+
+| `LLM_PROVIDER` | 呼び出し方式 | 必須 env | 任意 env | Token validation |
+|----------------|--------------|----------|----------|------------------|
+| `openai` | OpenAI Chat Completions API | `OPENAI_API_KEY` | `OPENAI_MODEL` | `sk-proj-` prefix かつ 40 文字以上 |
+| `anthropic` | Anthropic Messages API | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` | `sk-ant-api03-` prefix かつ 40 文字以上 |
+| `claude-code` | Claude Code CLI (`claude -p`) | なし | なし | なし |
+
+OpenAI / Anthropic の API endpoint は provider ごとに内部で固定しているため、API URL を環境変数で指定する必要はない:
+
+| Provider | Endpoint |
+|----------|----------|
+| `openai` | `https://api.openai.com/v1/chat/completions` |
+| `anthropic` | `https://api.anthropic.com/v1/messages` |
 
 ### Claude Code CLI 利用時の注意
 
-翻訳そのものは Claude の一般用途として扱われているが、`LLM_API_URL=claude-code` は非対話の `claude -p` 実行になる。
+翻訳そのものは Claude の一般用途として扱われているが、`LLM_PROVIDER=claude-code` は非対話の `claude -p` 実行になる。
 Claude subscription plan で使う場合、2026-06-15 以降は Agent SDK monthly credit の対象になる。
 credit を超えると、usage credits が有効なら標準 API rate で継続し、無効なら credit 更新まで停止する。
 
 個人のローカル実行や開発補助には使えるが、第三者ユーザーのリクエストを Free / Pro / Max plan の認証情報へ流す用途には使わない。
-共有サービス、本番バッチ、チームでの継続的な自動化では、Anthropic API key または対応 cloud provider を使う:
+共有サービス、本番バッチ、チームでの継続的な自動化では、Anthropic API key などの公式 API key を使う:
 
 ```bash
-export LLM_API_URL="https://api.anthropic.com"
-export LLM_API_TOKEN="sk-ant-..."
+export LLM_PROVIDER="anthropic"
+export ANTHROPIC_API_KEY="sk-ant-api03-<your-anthropic-api-key>"
 ```
 
 参考:
