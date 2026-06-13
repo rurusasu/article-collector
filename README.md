@@ -175,6 +175,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
+pwsh -NoLogo -NoProfile -File tests/article-news-report.Tests.ps1
 ```
 
 Taskfile は Rust CLI の薄いラッパーとして使える:
