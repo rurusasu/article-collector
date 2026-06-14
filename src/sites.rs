@@ -10,7 +10,7 @@ pub enum FetchRoute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecommendSource {
     HackerNewsTopStories { api_url: &'static str },
-    PageLinks { url: &'static str },
+    DevToArticles { api_url: &'static str },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -41,6 +41,7 @@ pub struct Site {
 }
 
 const HN_TOPSTORIES_API: &str = "https://hacker-news.firebaseio.com/v0/topstories.json";
+const DEVTO_ARTICLES_API: &str = "https://dev.to/api/articles?top=7";
 
 const TWITTER_FETCH_RULES: &[UrlRule] = &[
     UrlRule::new(&["x.com/", "/status/"]),
@@ -86,8 +87,8 @@ pub const SITES: &[Site] = &[
         fetch_rules: DEVTO_FETCH_RULES,
         save_type: "web",
         save_rules: &[],
-        recommend: Some(RecommendSource::PageLinks {
-            url: "https://dev.to/",
+        recommend: Some(RecommendSource::DevToArticles {
+            api_url: DEVTO_ARTICLES_API,
         }),
     },
     Site {
@@ -184,10 +185,16 @@ pub fn recommend_source_for_url(url: &str) -> Option<RecommendSource> {
 }
 
 pub fn recommendable_site_names() -> Vec<&'static str> {
+    recommendable_sites()
+        .into_iter()
+        .map(|site| site.name)
+        .collect()
+}
+
+pub fn recommendable_sites() -> Vec<&'static Site> {
     SITES
         .iter()
         .filter(|site| site.recommend.is_some())
-        .map(|site| site.name)
         .collect()
 }
 
@@ -292,6 +299,18 @@ mod tests {
     #[test]
     fn lists_recommendable_site_names() {
         assert_eq!(recommendable_site_names(), vec!["hackernews", "devto"]);
+    }
+
+    /// 検証: recommend 可能な Site 自体を registry から列挙する
+    /// 理由: `recommend all` は個別の名前リストではなく Site 定義から source を取得する
+    /// リスク: site 名だけ列挙され、recommend source を安全にたどれない
+    #[test]
+    fn lists_recommendable_sites() {
+        let sites = recommendable_sites();
+        assert_eq!(sites.len(), 2);
+        assert_eq!(sites[0].name, "hackernews");
+        assert_eq!(sites[1].name, "devto");
+        assert!(sites.iter().all(|site| site.recommend.is_some()));
     }
 
     /// 検証: supported URL examples は registry から列挙できる
