@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/rurusasu/article-collector/compare/article-collector-v0.2.2...article-collector-v0.3.0) (2026-06-14)
+
+
+### Features
+
+* add recommendation collection command ([88ab99b](https://github.com/rurusasu/article-collector/commit/88ab99bfe283bb3a27e429a4b807d0a70c0cfb13))
+* add recommendation collection command ([98759af](https://github.com/rurusasu/article-collector/commit/98759af967a7fafaf6fc06f47fce2ee67a7f5de3))
+
 ## [0.2.2](https://github.com/rurusasu/article-collector/compare/article-collector-v0.2.1...article-collector-v0.2.2) (2026-06-11)
 
 
