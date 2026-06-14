@@ -82,11 +82,6 @@ tasks:
     cmds:
       - cargo test --locked
 
-  test-powershell:
-    desc: "PowerShell wrapper tests を実行"
-    cmds:
-      - pwsh -NoLogo -NoProfile -File tests/article-news-report.Tests.ps1
-
   build:
     desc: "release build を検証"
     cmds:
@@ -97,14 +92,19 @@ tasks:
     cmds:
       - task: fmt
       - task: clippy
-      - shellcheck scripts/verify-pr.sh scripts/verify-rules.sh scripts/wait-ci.sh
+      - shellcheck scripts/*.sh
+      - task: workflow-security
+
+  workflow-security:
+    desc: "GitHub Actions の release automation hardening を検証"
+    cmds:
+      - bash scripts/verify-workflow-security.sh
 
   check:
     desc: "CI 相当のローカル検証"
     cmds:
       - task: lint
       - task: test
-      - task: test-powershell
       - task: build
 
   verify-pr:
