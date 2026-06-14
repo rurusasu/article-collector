@@ -20,7 +20,7 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-allowed='^(\.release-please-manifest\.json|CHANGELOG\.md|Cargo\.toml|Cargo\.lock)$'
+allowed='^(\.release-please-manifest\.json|Cargo\.toml|Cargo\.lock)$'
 changed_files="$(gh pr diff "$PR_NUMBER" --name-only)"
 
 if [ -z "$changed_files" ]; then

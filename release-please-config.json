@@ -1,5 +1,6 @@
 {
   "release-type": "rust",
+  "skip-changelog": true,
   "packages": {
     ".": {}
   }
