@@ -41,7 +41,7 @@ enum Commands {
     },
     /// 推薦記事/関連リンクをまとめて取得
     Recommend {
-        /// 推薦記事を探す site 名または起点 URL
+        /// 推薦記事を探す site 名、all、または起点 URL
         target: String,
         /// 収集する最大件数
         #[arg(short, long, default_value_t = 30)]
@@ -73,7 +73,10 @@ async fn main() -> Result<()> {
             save::save_and_pr(url)?;
         }
         Commands::Recommend { ref target, limit } => {
-            recommend::collect_recommended(target, limit).await?;
+            let collection = recommend::collect_recommended(target, limit).await?;
+            if collection.translation_required {
+                translate::translate(&collection.raw_path).await?;
+            }
         }
     }
 

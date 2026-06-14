@@ -31,7 +31,7 @@ tasks:
       - cargo run --locked -- fetch "{{.URL}}"
 
   recommend:
-    desc: "Rust CLI で site 名または起点 URL からレコメンド/関連リンクを取得"
+    desc: "Rust CLI で site 名/all/起点 URL からレコメンド/関連リンクを取得"
     requires:
       vars: [TARGET]
     preconditions:
