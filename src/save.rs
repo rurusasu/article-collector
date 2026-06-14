@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::paths;
+use crate::sites;
 
 pub fn save_and_pr(url: &str) -> Result<()> {
     let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
@@ -150,18 +151,7 @@ pub fn title_to_slug(title: &str) -> String {
 }
 
 pub fn determine_type(url: &str) -> String {
-    if url.contains("x.com/") || url.contains("twitter.com/") {
-        "x".to_string()
-    } else if url.contains("youtube.com/") || url.contains("youtu.be/") {
-        "youtube".to_string()
-    } else if url.contains("arxiv.org/")
-        || url.contains("doi.org/")
-        || url.contains("openreview.net/")
-    {
-        "paper".to_string()
-    } else {
-        "web".to_string()
-    }
+    sites::save_type_for_url(url).to_string()
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {

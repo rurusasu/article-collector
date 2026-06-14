@@ -1,6 +1,8 @@
 mod fetch;
 mod paths;
+mod recommend;
 mod save;
+mod sites;
 mod translate;
 mod youtube;
 
@@ -37,6 +39,14 @@ enum Commands {
         /// 元記事の URL
         url: String,
     },
+    /// 推薦記事/関連リンクをまとめて取得
+    Recommend {
+        /// 推薦記事を探す site 名または起点 URL
+        target: String,
+        /// 収集する最大件数
+        #[arg(short, long, default_value_t = 30)]
+        limit: usize,
+    },
 }
 
 #[tokio::main]
@@ -61,6 +71,9 @@ async fn main() -> Result<()> {
         }
         Commands::SaveAndPr { ref url } => {
             save::save_and_pr(url)?;
+        }
+        Commands::Recommend { ref target, limit } => {
+            recommend::collect_recommended(target, limit).await?;
         }
     }
 

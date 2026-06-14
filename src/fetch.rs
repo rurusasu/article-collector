@@ -5,31 +5,13 @@ use std::fs;
 use std::path::Path;
 
 use crate::paths;
+use crate::sites;
 use crate::youtube;
 
-#[derive(Debug, PartialEq)]
-pub enum Route {
-    Twitter,
-    YouTube,
-    HackerNews,
-    DevTo,
-    Generic,
-}
+pub use crate::sites::FetchRoute as Route;
 
 pub fn classify_url(url: &str) -> Route {
-    if (url.contains("x.com/") && url.contains("/status/"))
-        || (url.contains("twitter.com/") && url.contains("/status/"))
-    {
-        Route::Twitter
-    } else if url.contains("youtube.com/watch") || url.contains("youtu.be/") {
-        Route::YouTube
-    } else if url.contains("news.ycombinator.com/item") {
-        Route::HackerNews
-    } else if url.contains("dev.to/") {
-        Route::DevTo
-    } else {
-        Route::Generic
-    }
+    sites::fetch_route_for_url(url)
 }
 
 pub fn validate_url(url: &str) -> Result<()> {
