@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::reader::Reader;
 use reqwest::Url;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
@@ -14,6 +16,27 @@ use crate::sites::{self, RecommendSource};
 struct LinkCandidate {
     title: String,
     url: String,
+}
+
+#[derive(Default)]
+struct ZennFeedItem {
+    title: String,
+    url: String,
+    description: String,
+    published_at: String,
+    author: String,
+}
+
+#[derive(Default)]
+struct ArxivFeedEntry {
+    id: String,
+    title: String,
+    url: String,
+    summary: String,
+    published_at: String,
+    updated_at: String,
+    authors: Vec<String>,
+    categories: Vec<String>,
 }
 
 enum RecommendationTarget<'a> {
@@ -39,17 +62,25 @@ pub struct RecommendationCollection {
     pub translation_required: bool,
 }
 
-pub async fn collect_recommended(target: &str, limit: usize) -> Result<RecommendationCollection> {
+pub async fn collect_recommended(
+    target: &str,
+    limit: usize,
+    query: Option<&str>,
+) -> Result<RecommendationCollection> {
     validate_limit(limit)?;
 
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
     let items = match recommendation_target {
-        RecommendationTarget::AllSources => collect_all_sources(limit).await?,
+        RecommendationTarget::AllSources => {
+            reject_query_override(query)?;
+            collect_all_sources(limit).await?
+        }
         RecommendationTarget::Source { site_name, source } => {
-            collect_source(site_name, source, limit).await?
+            collect_source(site_name, source, limit, query).await?
         }
         RecommendationTarget::PageLinks { url } => {
+            reject_query_override(query)?;
             collect_page_links(url, "generic-web", None, limit).await?
         }
     };
@@ -142,6 +173,13 @@ fn source_count_for_target(target: &str) -> Result<usize> {
 fn validate_limit(limit: usize) -> Result<()> {
     if !(1..=MAX_LIMIT).contains(&limit) {
         bail!("limit must be between 1 and {MAX_LIMIT}");
+    }
+    Ok(())
+}
+
+fn reject_query_override(query: Option<&str>) -> Result<()> {
+    if query.is_some_and(|query| !query.trim().is_empty()) {
+        bail!("--query is only supported for queryable recommendation sources such as arxiv");
     }
     Ok(())
 }
@@ -316,6 +354,343 @@ fn devto_article_to_recommendation(data: &Value) -> Option<Value> {
     }))
 }
 
+async fn collect_zenn_feed(feed_url: &str, limit: usize) -> Result<Vec<Value>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let feed = client
+        .get(feed_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    parse_zenn_feed(&feed, limit)
+}
+
+fn parse_zenn_feed(feed: &str, limit: usize) -> Result<Vec<Value>> {
+    let mut reader = Reader::from_str(feed);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut items = Vec::new();
+    let mut current_item: Option<ZennFeedItem> = None;
+    let mut current_field: Option<String> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "item" {
+                    current_item = Some(ZennFeedItem::default());
+                } else if current_item.is_some() {
+                    current_field = Some(name);
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_zenn_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_zenn_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "item" {
+                    if let Some(item) = current_item.take().and_then(zenn_item_to_recommendation) {
+                        items.push(item);
+                    }
+                    if items.len() >= limit {
+                        break;
+                    }
+                }
+                current_field = None;
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => {
+                bail!(
+                    "Failed to parse Zenn feed at byte {}: {err}",
+                    reader.error_position()
+                );
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(items)
+}
+
+fn apply_zenn_text(item: &mut ZennFeedItem, field: &str, text: &str) {
+    let text = normalize_xml_text(text);
+    match field {
+        "title" => item.title = text,
+        "link" => item.url = text,
+        "description" => item.description = text,
+        "pubDate" => item.published_at = text,
+        "creator" => item.author = text,
+        _ => {}
+    }
+}
+
+fn zenn_item_to_recommendation(item: ZennFeedItem) -> Option<Value> {
+    let url = normalize_url(item.url);
+    if url.is_empty() {
+        return None;
+    }
+
+    let title = if item.title.is_empty() {
+        "Untitled".to_string()
+    } else {
+        item.title
+    };
+    let content = format!(
+        "Title: {title}\nURL: {url}\nAuthor: {}\nPublished: {}\nDescription: {}",
+        item.author, item.published_at, item.description
+    );
+
+    Some(json!({
+        "source": "zenn",
+        "title": title,
+        "url": url,
+        "author": item.author,
+        "published_at": item.published_at,
+        "description": item.description,
+        "content": content
+    }))
+}
+
+async fn collect_arxiv_search(api_url: &str, query: &str, limit: usize) -> Result<Vec<Value>> {
+    let url = build_arxiv_search_url(api_url, query, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let feed = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    parse_arxiv_feed(&feed, limit)
+}
+
+fn build_arxiv_search_url(api_url: &str, query: &str, limit: usize) -> Result<Url> {
+    let mut url = Url::parse(api_url).context("Invalid arXiv API URL")?;
+    url.query_pairs_mut()
+        .append_pair("search_query", query)
+        .append_pair("start", "0")
+        .append_pair("max_results", &limit.to_string())
+        .append_pair("sortBy", "submittedDate")
+        .append_pair("sortOrder", "descending");
+    Ok(url)
+}
+
+fn parse_arxiv_feed(feed: &str, limit: usize) -> Result<Vec<Value>> {
+    let mut reader = Reader::from_str(feed);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut items = Vec::new();
+    let mut current_entry: Option<ArxivFeedEntry> = None;
+    let mut current_field: Option<String> = None;
+    let mut in_author = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "entry" {
+                    current_entry = Some(ArxivFeedEntry::default());
+                } else if current_entry.is_some() {
+                    handle_arxiv_empty_like_element(&mut current_entry, &element)?;
+                    if name == "author" {
+                        in_author = true;
+                    }
+                    current_field = arxiv_text_field(&name, in_author);
+                }
+            }
+            Ok(Event::Empty(element)) if current_entry.is_some() => {
+                handle_arxiv_empty_like_element(&mut current_entry, &element)?;
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(entry), Some(field)) =
+                    (current_entry.as_mut(), current_field.as_deref())
+                {
+                    apply_arxiv_text(entry, field, &text.decode()?);
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if let (Some(entry), Some(field)) =
+                    (current_entry.as_mut(), current_field.as_deref())
+                {
+                    apply_arxiv_text(entry, field, &text.decode()?);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "entry" {
+                    if let Some(item) = current_entry.take().and_then(arxiv_entry_to_recommendation)
+                    {
+                        items.push(item);
+                    }
+                    if items.len() >= limit {
+                        break;
+                    }
+                } else if name == "author" {
+                    in_author = false;
+                }
+                current_field = None;
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => {
+                bail!(
+                    "Failed to parse arXiv feed at byte {}: {err}",
+                    reader.error_position()
+                );
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(items)
+}
+
+fn handle_arxiv_empty_like_element(
+    current_entry: &mut Option<ArxivFeedEntry>,
+    element: &BytesStart<'_>,
+) -> Result<()> {
+    let Some(entry) = current_entry.as_mut() else {
+        return Ok(());
+    };
+    let name = local_xml_name(element.name().as_ref());
+
+    match name.as_str() {
+        "link" => {
+            let href = xml_attr_value(element, b"href")?;
+            let rel = xml_attr_value(element, b"rel")?;
+            if rel.as_deref().unwrap_or("alternate") == "alternate" {
+                if let Some(href) = href {
+                    entry.url = normalize_arxiv_url(&href);
+                }
+            }
+        }
+        "category" => {
+            if let Some(term) = xml_attr_value(element, b"term")? {
+                entry.categories.push(term);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn arxiv_text_field(name: &str, in_author: bool) -> Option<String> {
+    match name {
+        "id" | "title" | "summary" | "published" | "updated" => Some(name.to_string()),
+        "name" if in_author => Some("author".to_string()),
+        _ => None,
+    }
+}
+
+fn apply_arxiv_text(entry: &mut ArxivFeedEntry, field: &str, text: &str) {
+    let text = normalize_xml_text(text);
+    match field {
+        "id" => entry.id = text,
+        "title" => entry.title = text,
+        "summary" => entry.summary = text,
+        "published" => entry.published_at = text,
+        "updated" => entry.updated_at = text,
+        "author" => entry.authors.push(text),
+        _ => {}
+    }
+}
+
+fn arxiv_entry_to_recommendation(entry: ArxivFeedEntry) -> Option<Value> {
+    let url = if entry.url.is_empty() {
+        normalize_arxiv_url(&entry.id)
+    } else {
+        entry.url
+    };
+    if url.is_empty() {
+        return None;
+    }
+
+    let title = if entry.title.is_empty() {
+        "Untitled".to_string()
+    } else {
+        entry.title
+    };
+    let authors = entry.authors.join(", ");
+    let categories = entry.categories.join(", ");
+    let content = format!(
+        "Title: {title}\nURL: {url}\nAuthors: {authors}\nCategories: {categories}\nPublished: {}\nUpdated: {}\nSummary: {}",
+        entry.published_at, entry.updated_at, entry.summary
+    );
+
+    Some(json!({
+        "source": "arxiv",
+        "title": title,
+        "url": url,
+        "authors": authors,
+        "categories": categories,
+        "published_at": entry.published_at,
+        "updated_at": entry.updated_at,
+        "summary": entry.summary,
+        "content": content
+    }))
+}
+
+fn local_xml_name(name: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(name);
+    raw.rsplit_once(':')
+        .map(|(_, local)| local.to_string())
+        .unwrap_or_else(|| raw.to_string())
+}
+
+fn xml_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>> {
+    for attr in element.attributes() {
+        let attr = attr?;
+        if attr.key.as_ref() == key {
+            return Ok(Some(
+                String::from_utf8_lossy(attr.value.as_ref()).to_string(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn normalize_xml_text(text: &str) -> String {
+    html_escape::decode_html_entities(text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_url(url: String) -> String {
+    url.trim().to_string()
+}
+
+fn normalize_arxiv_url(url: &str) -> String {
+    url.trim()
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .strip_prefix("arxiv.org/")
+        .map(|path| format!("https://arxiv.org/{path}"))
+        .unwrap_or_else(|| url.trim().to_string())
+}
+
 async fn collect_all_sources(limit: usize) -> Result<Vec<Value>> {
     let recommendable_sites = sites::recommendable_sites();
     let mut items = Vec::new();
@@ -324,7 +699,7 @@ async fn collect_all_sources(limit: usize) -> Result<Vec<Value>> {
         let source = site
             .recommend
             .context("recommendable site must have a recommend source")?;
-        let mut site_items = collect_source(site.name, source, limit)
+        let mut site_items = collect_source(site.name, source, limit, None)
             .await
             .with_context(|| {
                 format!(
@@ -346,13 +721,31 @@ async fn collect_source(
     site_name: &'static str,
     source: RecommendSource,
     limit: usize,
+    query: Option<&str>,
 ) -> Result<Vec<Value>> {
     let mut items = match source {
         RecommendSource::HackerNewsTopStories { api_url } => {
+            reject_query_override(query)?;
             collect_hackernews_topstories(api_url, limit).await?
         }
         RecommendSource::DevToArticles { api_url } => {
+            reject_query_override(query)?;
             collect_devto_articles(api_url, limit).await?
+        }
+        RecommendSource::ZennFeed { feed_url } => {
+            reject_query_override(query)?;
+            collect_zenn_feed(feed_url, limit).await?
+        }
+        RecommendSource::ArxivSearch {
+            api_url,
+            default_query,
+        } => {
+            collect_arxiv_search(
+                api_url,
+                query_override_or_default(query, default_query),
+                limit,
+            )
+            .await?
         }
     };
 
@@ -363,6 +756,12 @@ async fn collect_source(
     }
 
     Ok(items)
+}
+
+fn query_override_or_default<'a>(query: Option<&'a str>, default_query: &'a str) -> &'a str {
+    query
+        .filter(|query| !query.trim().is_empty())
+        .unwrap_or(default_query)
 }
 
 async fn collect_page_links(
@@ -508,6 +907,45 @@ mod tests {
         assert_eq!(api_url, "https://dev.to/api/articles?top=7");
     }
 
+    /// 検証: Zenn の site 名はトレンド RSS 収集へ解決する
+    /// 理由: `recommend all` で Zenn の技術トレンドも取得したい
+    /// リスク: Zenn が generic link 抽出に落ち、記事推薦として正規化されない
+    #[test]
+    fn resolves_zenn_site_name_to_feed() {
+        let RecommendationTarget::Source {
+            site_name,
+            source: RecommendSource::ZennFeed { feed_url },
+        } = resolve_recommendation_target("zenn").unwrap()
+        else {
+            panic!("zenn should resolve to Zenn feed");
+        };
+        assert_eq!(site_name, "zenn");
+        assert_eq!(feed_url, "https://zenn.dev/feed");
+    }
+
+    /// 検証: arXiv の site 名は既定 query の arXiv API 収集へ解決する
+    /// 理由: AI/ML/CV/NLP 系の新着論文を `recommend all` に含めたい
+    /// リスク: 論文 source が登録されず、既存の fetch/save 対応だけに留まる
+    #[test]
+    fn resolves_arxiv_site_name_to_default_search() {
+        let RecommendationTarget::Source {
+            site_name,
+            source:
+                RecommendSource::ArxivSearch {
+                    api_url,
+                    default_query,
+                },
+        } = resolve_recommendation_target("arxiv").unwrap()
+        else {
+            panic!("arxiv should resolve to arXiv search");
+        };
+        assert_eq!(site_name, "arxiv");
+        assert_eq!(api_url, "https://export.arxiv.org/api/query");
+        assert!(default_query.contains("cat:cs.CV"));
+        assert!(default_query.contains("cat:cs.LG"));
+        assert!(default_query.contains("stat.ML"));
+    }
+
     /// 検証: all は registry 上の全 recommend source 収集として扱う
     /// 理由: 個別 site 名を列挙せずに一括収集と翻訳を開始できるようにする
     /// リスク: all が未知 site として拒否され、バッチ用途で使えない
@@ -623,6 +1061,95 @@ mod tests {
         assert_eq!(
             recommendation["content"],
             "Title: Example Dev.to story\nURL: https://dev.to/example/story\nAuthor: alice\nTags: rust, cli\nDescription: Short description"
+        );
+    }
+
+    /// 検証: Zenn RSS item を推薦項目へ正規化する
+    /// 理由: RSS の title/link/description/pubDate を raw.json に安定して渡す
+    /// リスク: XML 構造差分で Zenn 記事の URL または本文が欠落する
+    #[test]
+    fn parses_zenn_rss_items() {
+        let rss = r#"
+            <rss><channel>
+                <item>
+                    <title>Example Zenn article</title>
+                    <link>https://zenn.dev/example/articles/abc</link>
+                    <description>Article summary</description>
+                    <pubDate>Sun, 14 Jun 2026 00:00:00 GMT</pubDate>
+                    <dc:creator>alice</dc:creator>
+                </item>
+            </channel></rss>
+        "#;
+
+        let items = parse_zenn_feed(rss, 1).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "zenn");
+        assert_eq!(items[0]["title"], "Example Zenn article");
+        assert_eq!(items[0]["url"], "https://zenn.dev/example/articles/abc");
+        assert_eq!(items[0]["author"], "alice");
+    }
+
+    /// 検証: arXiv Atom entry を推薦項目へ正規化する
+    /// 理由: arXiv API の Atom XML から論文 title/link/summary/category を取得する
+    /// リスク: arXiv API が JSON ではないため、XML parser 不備で結果が空になる
+    #[test]
+    fn parses_arxiv_atom_entries() {
+        let atom = r#"
+            <feed xmlns="http://www.w3.org/2005/Atom">
+                <entry>
+                    <id>http://arxiv.org/abs/2606.00001v1</id>
+                    <updated>2026-06-14T00:00:00Z</updated>
+                    <published>2026-06-14T00:00:00Z</published>
+                    <title>Example vision paper</title>
+                    <summary>Paper abstract</summary>
+                    <author><name>Alice Example</name></author>
+                    <author><name>Bob Example</name></author>
+                    <link href="http://arxiv.org/abs/2606.00001v1" rel="alternate" type="text/html"/>
+                    <category term="cs.CV"/>
+                    <category term="cs.LG"/>
+                </entry>
+            </feed>
+        "#;
+
+        let items = parse_arxiv_feed(atom, 1).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "arxiv");
+        assert_eq!(items[0]["title"], "Example vision paper");
+        assert_eq!(items[0]["url"], "https://arxiv.org/abs/2606.00001v1");
+        assert_eq!(items[0]["authors"], "Alice Example, Bob Example");
+        assert_eq!(items[0]["categories"], "cs.CV, cs.LG");
+    }
+
+    /// 検証: arXiv API URL は指定 query と limit を反映する
+    /// 理由: `recommend arxiv --query ...` で関心カテゴリを上書きしたい
+    /// リスク: ユーザー指定 query が無視され、既定カテゴリしか取得できない
+    #[test]
+    fn builds_arxiv_search_url_with_custom_query() {
+        let url = build_arxiv_search_url(
+            "https://export.arxiv.org/api/query",
+            "cat:cs.CV OR cat:cs.LG",
+            5,
+        )
+        .unwrap();
+        assert_eq!(url.host_str(), Some("export.arxiv.org"));
+        assert!(url.as_str().contains("search_query=cat%3Acs.CV"));
+        assert!(url.as_str().contains("max_results=5"));
+        assert!(url.as_str().contains("sortBy=submittedDate"));
+        assert!(url.as_str().contains("sortOrder=descending"));
+    }
+
+    /// 検証: 空の query override は arXiv 既定 query に戻す
+    /// 理由: `--query ""` で空検索を投げず、通常の関心カテゴリ収集を維持する
+    /// リスク: shell 変数展開ミスなどで空 query が渡ると arXiv 収集が失敗する
+    #[test]
+    fn blank_arxiv_query_uses_default_query() {
+        assert_eq!(
+            query_override_or_default(Some("   "), "cat:cs.CV"),
+            "cat:cs.CV"
+        );
+        assert_eq!(
+            query_override_or_default(Some("cat:cs.LG"), "cat:cs.CV"),
+            "cat:cs.LG"
         );
     }
 

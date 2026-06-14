@@ -38,7 +38,7 @@ tasks:
       - sh: command -v cargo
         msg: "cargo is required"
     cmds:
-      - cargo run --locked -- recommend "{{.TARGET}}" {{if .LIMIT}}--limit {{.LIMIT}}{{end}}
+      - cargo run --locked -- recommend "{{.TARGET}}" {{if .LIMIT}}--limit {{.LIMIT}}{{end}} {{if .QUERY}}--query "{{.QUERY}}"{{end}}
 
   translate:
     desc: "Rust CLI で取得済み JSON を翻訳"

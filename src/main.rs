@@ -46,6 +46,9 @@ enum Commands {
         /// 収集する最大件数
         #[arg(short, long, default_value_t = 30)]
         limit: usize,
+        /// arXiv など query 対応 source の検索条件
+        #[arg(long)]
+        query: Option<String>,
     },
 }
 
@@ -72,8 +75,13 @@ async fn main() -> Result<()> {
         Commands::SaveAndPr { ref url } => {
             save::save_and_pr(url)?;
         }
-        Commands::Recommend { ref target, limit } => {
-            let collection = recommend::collect_recommended(target, limit).await?;
+        Commands::Recommend {
+            ref target,
+            limit,
+            ref query,
+        } => {
+            let collection =
+                recommend::collect_recommended(target, limit, query.as_deref()).await?;
             if collection.translation_required {
                 translate::translate(&collection.raw_path).await?;
             }

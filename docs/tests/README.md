@@ -29,6 +29,7 @@ task check
 | `fetch.rs` | URL バリデーション、ルーティング、ID 抽出、HTML ストリッピング |
 | `save.rs` | タイプ判定、タイトルサニタイズ、slug 生成 |
 | `translate.rs` | プロバイダー検出、エンドポイント解決、コンテンツ抽出 |
+| `recommend.rs` | recommend target 解決、各 source の正規化、RSS/Atom パース |
 | `youtube.rs` | JSON3 字幕抽出、XML 字幕抽出 |
 | `paths.rs` | 作業ディレクトリと出力ファイルパス |
 

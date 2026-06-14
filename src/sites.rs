@@ -9,8 +9,19 @@ pub enum FetchRoute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecommendSource {
-    HackerNewsTopStories { api_url: &'static str },
-    DevToArticles { api_url: &'static str },
+    HackerNewsTopStories {
+        api_url: &'static str,
+    },
+    DevToArticles {
+        api_url: &'static str,
+    },
+    ZennFeed {
+        feed_url: &'static str,
+    },
+    ArxivSearch {
+        api_url: &'static str,
+        default_query: &'static str,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -42,6 +53,9 @@ pub struct Site {
 
 const HN_TOPSTORIES_API: &str = "https://hacker-news.firebaseio.com/v0/topstories.json";
 const DEVTO_ARTICLES_API: &str = "https://dev.to/api/articles?top=7";
+const ZENN_FEED_URL: &str = "https://zenn.dev/feed";
+const ARXIV_API_URL: &str = "https://export.arxiv.org/api/query";
+const DEFAULT_ARXIV_QUERY: &str = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:stat.ML";
 
 const TWITTER_FETCH_RULES: &[UrlRule] = &[
     UrlRule::new(&["x.com/", "/status/"]),
@@ -61,6 +75,7 @@ const YOUTUBE_SAVE_RULES: &[UrlRule] = &[
 
 const HACKERNEWS_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["news.ycombinator.com/item"])];
 const DEVTO_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["dev.to/"])];
+const ZENN_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["zenn.dev/"])];
 
 const ARXIV_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["arxiv.org/"])];
 const DOI_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["doi.org/"])];
@@ -89,6 +104,18 @@ pub const SITES: &[Site] = &[
         save_rules: &[],
         recommend: Some(RecommendSource::DevToArticles {
             api_url: DEVTO_ARTICLES_API,
+        }),
+    },
+    Site {
+        name: "zenn",
+        aliases: &["zenn.dev"],
+        supported_urls: &["https://zenn.dev/<user>/articles/<slug>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: ZENN_FETCH_RULES,
+        save_type: "web",
+        save_rules: ZENN_FETCH_RULES,
+        recommend: Some(RecommendSource::ZennFeed {
+            feed_url: ZENN_FEED_URL,
         }),
     },
     Site {
@@ -125,7 +152,10 @@ pub const SITES: &[Site] = &[
         fetch_rules: &[],
         save_type: "paper",
         save_rules: ARXIV_SAVE_RULES,
-        recommend: None,
+        recommend: Some(RecommendSource::ArxivSearch {
+            api_url: ARXIV_API_URL,
+            default_query: DEFAULT_ARXIV_QUERY,
+        }),
     },
     Site {
         name: "doi",
@@ -298,7 +328,10 @@ mod tests {
     /// リスク: 使えない site 名が候補として表示される
     #[test]
     fn lists_recommendable_site_names() {
-        assert_eq!(recommendable_site_names(), vec!["hackernews", "devto"]);
+        assert_eq!(
+            recommendable_site_names(),
+            vec!["hackernews", "devto", "zenn", "arxiv"]
+        );
     }
 
     /// 検証: recommend 可能な Site 自体を registry から列挙する
@@ -307,9 +340,11 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 2);
+        assert_eq!(sites.len(), 4);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
+        assert_eq!(sites[2].name, "zenn");
+        assert_eq!(sites[3].name, "arxiv");
         assert!(sites.iter().all(|site| site.recommend.is_some()));
     }
 
