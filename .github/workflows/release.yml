@@ -12,13 +12,14 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release-plz:
-    name: Release-plz release
+  release:
+    name: GitHub Release
     if: ${{ github.repository_owner == 'rurusasu' }}
     runs-on: ubuntu-latest
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
-      tag_name: ${{ steps.release-tag.outputs.tag_name }}
+      tag_exists: ${{ steps.release.outputs.tag_exists }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
@@ -42,32 +43,81 @@ jobs:
           permission-contents: write
           permission-pull-requests: read
 
-      - name: Run release-plz release
+      - name: Resolve release request
         id: release
-        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
-        with:
-          command: release
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: |
+          set -euo pipefail
 
-      - name: Parse release tag
-        id: release-tag
+          git fetch --force --tags origin
+
+          version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r 'first(.packages[] | select(.name == "article-collector") | .version) // empty'
+          )"
+          if [ -z "$version" ]; then
+            echo "Could not resolve article-collector version from Cargo metadata" >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "tag_exists=true" >> "$GITHUB_OUTPUT"
+            echo "releases_created=false" >> "$GITHUB_OUTPUT"
+            echo "Release tag $tag already exists."
+            exit 0
+          fi
+
+          echo "tag_exists=false" >> "$GITHUB_OUTPUT"
+
+          release_requested=false
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            release_requested=true
+          else
+            prs="$(
+              gh api \
+                -H "Accept: application/vnd.github+json" \
+                "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls"
+            )"
+            pr_head="$(printf '%s' "$prs" | jq -r '.[0].head.ref // empty')"
+            pr_title="$(printf '%s' "$prs" | jq -r '.[0].title // empty')"
+            echo "Associated PR head: ${pr_head:-none}"
+            echo "Associated PR title: ${pr_title:-none}"
+
+            if [[ "$pr_head" == release-plz-* ]]; then
+              release_requested=true
+            fi
+          fi
+
+          if [ "$release_requested" != "true" ]; then
+            echo "releases_created=false" >> "$GITHUB_OUTPUT"
+            echo "No GitHub release requested for this push."
+            exit 0
+          fi
+
+          echo "releases_created=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
         if: ${{ steps.release.outputs.releases_created == 'true' }}
         shell: bash
         env:
-          RELEASES: ${{ steps.release.outputs.releases }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
           set -euo pipefail
-          tag="$(printf '%s' "$RELEASES" | jq -r '.[0].tag // empty')"
-          if [ -z "$tag" ]; then
-            echo "release-plz reported a release but did not return a tag" >&2
-            exit 1
-          fi
-          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+          gh release create "$TAG_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "article-collector: $TAG_NAME" \
+            --generate-notes
 
   release-plz-pr:
     name: Release-plz PR
-    if: ${{ github.repository_owner == 'rurusasu' }}
+    needs: release
+    if: ${{ github.repository_owner == 'rurusasu' && github.event_name == 'push' && needs.release.outputs.tag_exists == 'true' }}
     runs-on: ubuntu-latest
     concurrency:
       group: release-plz-${{ github.ref }}
@@ -104,8 +154,8 @@ jobs:
 
   build:
     name: Build (${{ matrix.target }})
-    needs: release-plz
-    if: ${{ needs.release-plz.outputs.releases_created == 'true' && needs.release-plz.outputs.tag_name != '' }}
+    needs: release
+    if: ${{ needs.release.outputs.releases_created == 'true' && needs.release.outputs.tag_name != '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -129,7 +179,7 @@ jobs:
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          ref: ${{ needs.release-plz.outputs.tag_name }}
+          ref: ${{ needs.release.outputs.tag_name }}
 
       - name: Install Rust toolchain
         shell: bash
@@ -185,6 +235,6 @@ jobs:
           permission-contents: write
 
       - name: Upload release asset
-        run: gh release upload ${{ needs.release-plz.outputs.tag_name }} ${{ matrix.artifact }} --clobber
+        run: gh release upload ${{ needs.release.outputs.tag_name }} ${{ matrix.artifact }} --clobber
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}

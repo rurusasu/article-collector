@@ -253,9 +253,9 @@ task check
 ## リリース
 
 `main` に push されると `.github/workflows/release.yml` が実行される。
-通常の PR merge では release-plz が Release PR を作成・更新し、Release PR が merge されると GitHub Release と各 OS 向け asset が同じ workflow 内で作成される。
+通常の PR merge では release-plz が Release PR を作成・更新する。Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、GitHub Release と各 OS 向け asset を同じ workflow 内で作成する。
 
-release-plz は `git_only = true` で動かすため、version 判定は git tag を基準にする。今後の tag は release-plz の default に合わせて `v0.7.0` のような形式を使う。移行時は旧 `article-collector-v0.6.1` tag と同じ commit に `v0.6.1` の baseline tag を一度だけ作成してから運用する。
+release-plz は `git_only = true` で動かすため、Release PR の version 判定は git tag を基準にする。今後の tag は release-plz の default に合わせて `v0.7.0` のような形式を使う。移行時は旧 `article-collector-v0.6.1` tag と同じ commit に `v0.6.1` の baseline tag を一度だけ作成してから運用する。
 
 ```bash
 git fetch origin --tags

@@ -3,7 +3,7 @@
 ## Overview
 
 GitHub Actions で Rust CLI の検証とリリースを実行する。
-バージョン管理と GitHub Release 作成は [release-plz](https://release-plz.dev/) で自動化している。
+Release PR と version bump は [release-plz](https://release-plz.dev/) で自動化し、tag と GitHub Release は workflow 内の `gh release create` で作成する。
 
 ## 全体フロー
 
@@ -11,10 +11,13 @@ GitHub Actions で Rust CLI の検証とリリースを実行する。
 graph TB
   pr["pull_request"] --> ci["CI<br/>fmt, clippy, test, build, shellcheck"]
   merge["PR merged to main"] --> release["Release workflow"]
-  release --> rp["release-plz release-pr<br/>Release PR 作成/更新"]
-  release --> publish["release-plz release<br/>tag / GitHub Release"]
-  publish --> created{"releases_created"}
-  created -->|true| build["cross-platform build"]
+  release --> tagcheck["Cargo.toml version<br/>tag existence check"]
+  tagcheck --> exists{"current version<br/>tag exists"}
+  exists -->|true| rp["release-plz release-pr<br/>Release PR 作成/更新"]
+  exists -->|false| requested{"release-plz PR merge<br/>or manual dispatch"}
+  requested -->|true| publish["gh release create<br/>tag / GitHub Release"]
+  requested -->|false| noop["no release action"]
+  publish --> build["cross-platform build"]
   build --> upload["upload release assets"]
 ```
 
@@ -35,11 +38,11 @@ graph TB
 **トリガー:** `main` への push、または手動実行
 
 通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
-Release PR が merge されると `release-plz release` が tag と GitHub Release を作成し、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
+Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、`gh release create` で tag と GitHub Release を作成する。その後、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
 
-`release-plz.toml` は `git_only = true` にしているため、version 判定は crates.io ではなく git tag で行う。tag 名は release-plz の single-crate default に合わせ、今後は `v0.7.0` のような形式を使う。
+`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、今後は `v0.7.0` のような形式を使う。
 
-既存 release-please 時代の tag は `article-collector-v0.6.1` 形式だったため、移行時は一度だけ `v0.6.1` の baseline tag を既存 `article-collector-v0.6.1` と同じ commit に作成してから release-plz に任せる。これを行わないと、release-plz は git-only mode で既存 release を見つけられず、初回 release 判定が過去履歴全体に広がる。
+既存 release-please 時代の tag は `article-collector-v0.6.1` 形式だったため、移行時は一度だけ `v0.6.1` の baseline tag を既存 `article-collector-v0.6.1` と同じ commit に作成してから release-plz の Release PR 判定に移行する。これを行わないと、release-plz は git-only mode で既存 release を見つけられず、初回 release 判定が過去履歴全体に広がる。
 
 ```bash
 git fetch origin --tags
@@ -55,12 +58,14 @@ git push origin v0.6.1
 | `article-collector-macos-amd64` | `x86_64-apple-darwin` |
 | `article-collector-macos-arm64` | `aarch64-apple-darwin` |
 
-> デフォルト `GITHUB_TOKEN` による Release 作成は別 workflow を起動しないため、Release 作成と asset build/upload は同一 workflow に置いている。
+> デフォルト `GITHUB_TOKEN` による Release 作成は別 workflow を起動しないため、GitHub App token での Release 作成と asset build/upload は同一 workflow に置いている。
 
 ### セキュリティ
 
-- `permissions: contents: write` は tag / GitHub Release / asset upload に必要
-- `permissions: pull-requests: write` は Release PR 作成・更新に必要
+- workflow のデフォルト `GITHUB_TOKEN` は `contents: read` のみ
+- GitHub App token の `contents: write` は tag / GitHub Release / asset upload に必要
+- GitHub App token の `pull-requests: read` は main commit に対応する Release PR 判定に必要
+- GitHub App token の `pull-requests: write` は Release PR 作成・更新に必要
 - build は `--locked` で `Cargo.lock` の整合性を検証する
 
 ## ワークフローファイル
