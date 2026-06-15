@@ -3,7 +3,7 @@
 ## Overview
 
 GitHub Actions で Rust CLI の検証とリリースを実行する。
-バージョン管理と GitHub Release 作成は [release-please](https://github.com/googleapis/release-please) で自動化している。
+バージョン管理と GitHub Release 作成は [release-plz](https://release-plz.dev/) で自動化している。
 
 ## 全体フロー
 
@@ -11,8 +11,9 @@ GitHub Actions で Rust CLI の検証とリリースを実行する。
 graph TB
   pr["pull_request"] --> ci["CI<br/>fmt, clippy, test, build, shellcheck"]
   merge["PR merged to main"] --> release["Release workflow"]
-  release --> rp["release-please<br/>Release PR または GitHub Release"]
-  rp --> created{"release_created"}
+  release --> rp["release-plz release-pr<br/>Release PR 作成/更新"]
+  release --> publish["release-plz release<br/>tag / GitHub Release"]
+  publish --> created{"releases_created"}
   created -->|true| build["cross-platform build"]
   build --> upload["upload release assets"]
 ```
@@ -31,10 +32,20 @@ graph TB
 
 ## Release (`release.yml`)
 
-**トリガー:** `main` 宛の PR が merge されたとき、または手動実行
+**トリガー:** `main` への push、または手動実行
 
-通常の feature/fix PR が merge されると release-please が Release PR を作成または更新する。
-Release PR が merge されると同じ workflow 内で GitHub Release が作成され、各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
+通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
+Release PR が merge されると `release-plz release` が tag と GitHub Release を作成し、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
+
+`release-plz.toml` は `git_only = true` にしているため、version 判定は crates.io ではなく git tag で行う。tag 名は release-plz の single-crate default に合わせ、今後は `v0.7.0` のような形式を使う。
+
+既存 release-please 時代の tag は `article-collector-v0.6.1` 形式だったため、移行時は一度だけ `v0.6.1` の baseline tag を既存 `article-collector-v0.6.1` と同じ commit に作成してから release-plz に任せる。これを行わないと、release-plz は git-only mode で既存 release を見つけられず、初回 release 判定が過去履歴全体に広がる。
+
+```bash
+git fetch origin --tags
+git tag v0.6.1 article-collector-v0.6.1
+git push origin v0.6.1
+```
 
 | Asset | Target |
 |-------|--------|
@@ -59,5 +70,4 @@ Release PR が merge されると同じ workflow 内で GitHub Release が作成
 | `.github/workflows/ci.yml` | PR CI |
 | `.github/workflows/release.yml` | Release PR 作成 + GitHub Release + asset build/upload |
 | `.github/workflows/pr-checklist.yml` | PR checklist 検証 |
-| `release-please-config.json` | release-please 設定 |
-| `.release-please-manifest.json` | release-please のバージョン管理 |
+| `release-plz.toml` | release-plz の git-only release 設定 |

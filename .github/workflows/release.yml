@@ -1,8 +1,7 @@
 name: Release
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
   workflow_dispatch:
 
@@ -13,15 +12,77 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  release-please:
-    name: Create Release PR / Release
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true }}
+  release-plz:
+    name: Release-plz release
+    if: ${{ github.repository_owner == 'rurusasu' }}
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release-tag.outputs.tag_name }}
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Create release GitHub App token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: read
+
+      - name: Run release-plz release
+        id: release
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
+
+      - name: Parse release tag
+        id: release-tag
+        if: ${{ steps.release.outputs.releases_created == 'true' }}
+        shell: bash
+        env:
+          RELEASES: ${{ steps.release.outputs.releases }}
+        run: |
+          set -euo pipefail
+          tag="$(printf '%s' "$RELEASES" | jq -r '.[0].tag // empty')"
+          if [ -z "$tag" ]; then
+            echo "release-plz reported a release but did not return a tag" >&2
+            exit 1
+          fi
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+
+  release-plz-pr:
+    name: Release-plz PR
+    if: ${{ github.repository_owner == 'rurusasu' }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
       - name: Create release GitHub App token
         id: release-token
@@ -34,17 +95,17 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
-        id: release
+      - name: Run release-plz release-pr
+        uses: release-plz/action@e8792575c7f2366cf6ff3ccc33ead9ace5b691c7 # v0.5.130
         with:
-          token: ${{ steps.release-token.outputs.token }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ steps.release-token.outputs.token }}
 
   build:
     name: Build (${{ matrix.target }})
-    needs: release-please
-    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    needs: release-plz
+    if: ${{ needs.release-plz.outputs.releases_created == 'true' && needs.release-plz.outputs.tag_name != '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -68,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
-          ref: ${{ needs.release-please.outputs.tag_name }}
+          ref: ${{ needs.release-plz.outputs.tag_name }}
 
       - name: Install Rust toolchain
         shell: bash
@@ -124,6 +185,6 @@ jobs:
           permission-contents: write
 
       - name: Upload release asset
-        run: gh release upload ${{ needs.release-please.outputs.tag_name }} ${{ matrix.artifact }} --clobber
+        run: gh release upload ${{ needs.release-plz.outputs.tag_name }} ${{ matrix.artifact }} --clobber
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}

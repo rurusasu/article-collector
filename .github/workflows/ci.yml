@@ -21,7 +21,7 @@ jobs:
 
   release-pr-scope:
     name: Release PR Scope
-    if: startsWith(github.head_ref, 'release-please--')
+    if: startsWith(github.head_ref, 'release-plz-')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,10 +83,10 @@ jobs:
         run: cargo install taplo-cli --version 0.10.0 --locked
 
       - name: Check TOML formatting
-        run: taplo format --check Cargo.toml article-collector.toml
+        run: taplo format --check Cargo.toml article-collector.toml release-plz.toml
 
       - name: Run TOML lint
-        run: taplo lint Cargo.toml article-collector.toml
+        run: taplo lint Cargo.toml article-collector.toml release-plz.toml
 
   script-lint:
     name: Script Lint

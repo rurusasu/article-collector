@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify that release-please PRs only contain release metadata changes.
+# Verify that release-plz PRs only contain release metadata changes.
 set -euo pipefail
 
 usage() {
@@ -20,7 +20,7 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-allowed='^(\.release-please-manifest\.json|Cargo\.toml|Cargo\.lock)$'
+allowed='^(Cargo\.toml|Cargo\.lock)$'
 changed_files="$(gh pr diff "$PR_NUMBER" --name-only)"
 
 if [ -z "$changed_files" ]; then

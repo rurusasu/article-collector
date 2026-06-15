@@ -83,7 +83,7 @@ tasks:
       - sh: command -v taplo
         msg: "taplo CLI is required"
     cmds:
-      - taplo format --check Cargo.toml article-collector.toml
+      - taplo format --check Cargo.toml article-collector.toml release-plz.toml
 
   toml-lint:
     desc: "TOML lint を実行"
@@ -91,7 +91,7 @@ tasks:
       - sh: command -v taplo
         msg: "taplo CLI is required"
     cmds:
-      - taplo lint Cargo.toml article-collector.toml
+      - taplo lint Cargo.toml article-collector.toml release-plz.toml
 
   toml-check:
     desc: "TOML formatting と lint を検証"
