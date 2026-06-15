@@ -1,3 +1,4 @@
+mod config;
 mod fetch;
 mod paths;
 mod recommend;
@@ -44,11 +45,14 @@ enum Commands {
         /// 推薦記事を探す site 名、all、または起点 URL
         target: String,
         /// 収集する最大件数
-        #[arg(short, long, default_value_t = 30)]
-        limit: usize,
+        #[arg(short, long)]
+        limit: Option<usize>,
         /// arXiv など query 対応 source の検索条件
         #[arg(long)]
         query: Option<String>,
+        /// article-collector TOML config のパス
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
 }
 
@@ -79,9 +83,16 @@ async fn main() -> Result<()> {
             ref target,
             limit,
             ref query,
+            ref config,
         } => {
-            let collection =
-                recommend::collect_recommended(target, limit, query.as_deref()).await?;
+            let app_config = config::load(config.as_deref())?;
+            let collection = recommend::collect_recommended(
+                target,
+                limit,
+                query.as_deref(),
+                &app_config.recommend,
+            )
+            .await?;
             if collection.translation_required {
                 translate::translate(&collection.raw_path).await?;
             }

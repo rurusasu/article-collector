@@ -38,7 +38,7 @@ tasks:
       - sh: command -v cargo
         msg: "cargo is required"
     cmds:
-      - cargo run --locked -- recommend "{{.TARGET}}" {{if .LIMIT}}--limit {{.LIMIT}}{{end}} {{if .QUERY}}--query "{{.QUERY}}"{{end}}
+      - cargo run --locked -- recommend "{{.TARGET}}" {{if .LIMIT}}--limit {{.LIMIT}}{{end}} {{if .QUERY}}--query "{{.QUERY}}"{{end}} {{if .CONFIG}}--config "{{.CONFIG}}"{{end}}
 
   translate:
     desc: "Rust CLI で取得済み JSON を翻訳"
@@ -77,6 +77,28 @@ tasks:
     cmds:
       - cargo clippy --all-targets -- -D warnings
 
+  toml-fmt:
+    desc: "TOML formatting を検証"
+    preconditions:
+      - sh: command -v taplo
+        msg: "taplo CLI is required"
+    cmds:
+      - taplo format --check Cargo.toml article-collector.toml
+
+  toml-lint:
+    desc: "TOML lint を実行"
+    preconditions:
+      - sh: command -v taplo
+        msg: "taplo CLI is required"
+    cmds:
+      - taplo lint Cargo.toml article-collector.toml
+
+  toml-check:
+    desc: "TOML formatting と lint を検証"
+    cmds:
+      - task: toml-fmt
+      - task: toml-lint
+
   test:
     desc: "Rust unit tests を実行"
     cmds:
@@ -88,10 +110,11 @@ tasks:
       - cargo build --release --locked
 
   lint:
-    desc: "Rust と検証スクリプトを lint"
+    desc: "Rust、TOML、検証スクリプトを lint"
     cmds:
       - task: fmt
       - task: clippy
+      - task: toml-check
       - shellcheck scripts/*.sh
       - task: workflow-security
 

@@ -12,6 +12,7 @@ VERIFY_RULES=(
   "cargo test|ユニットテスト|unit test:::cargo test --locked:::Run Rust unit tests"
   "cargo fmt|フォーマット|formatting:::cargo fmt --check:::Check Rust formatting"
   "cargo clippy|clippy|lint:::cargo clippy --all-targets -- -D warnings:::Run clippy lints"
+  "taplo|toml.*format|toml.*lint|toml:::task toml-check:::Check TOML formatting and lint"
   "cargo build|ビルド|build succeeds|build.*成功:::cargo build --release --locked:::Verify release build"
   "GitHub Actions|workflow.*security|release.*automation|hardening:::bash scripts/verify-workflow-security.sh:::Verify GitHub Actions hardening"
   "shellcheck:::shellcheck scripts/*.sh:::Lint shell scripts"

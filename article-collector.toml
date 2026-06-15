@@ -1,0 +1,7 @@
+[recommend]
+sources = ["hackernews", "devto", "zenn", "arxiv"]
+limit = 30
+
+[recommend.source.arxiv]
+limit = 10
+query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
