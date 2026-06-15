@@ -4,7 +4,7 @@
 
 **Goal:** Replace release-please with release-plz while keeping the existing same-workflow multi-platform release asset build.
 
-**Architecture:** `release-plz` owns git-only versioning, Release PR creation, tag creation, and GitHub Release creation. The existing release matrix build remains in `.github/workflows/release.yml` and runs only when `release-plz release` reports `releases_created == true`, deriving the tag from the action's JSON output.
+**Architecture:** `release-plz` owns git-only versioning and Release PR creation. The workflow derives the `v{{ version }}` tag from `Cargo.toml`, creates the GitHub Release with `gh release create`, and then runs the existing release matrix build when that release is created.
 
 **Tech Stack:** GitHub Actions, release-plz action, GitHub App token, Rust stable, `gh release upload`, Bash workflow guard scripts.
 
@@ -17,7 +17,7 @@
 
 - [ ] **Step 1: Add release-plz expectations**
 
-Replace release-please-specific checks with checks for a pinned `release-plz/action`, `command: release-pr`, `command: release`, release output parsing, and GitHub App token use.
+Replace release-please-specific checks with checks for a pinned `release-plz/action`, `command: release-pr`, explicit absence of `command: release`, Cargo metadata tag derivation, `gh release create`, and GitHub App token use.
 
 - [ ] **Step 2: Verify RED**
 
@@ -32,7 +32,7 @@ Expected: FAIL because `.github/workflows/release.yml` still uses `googleapis/re
 
 - [ ] **Step 1: Replace release-please job**
 
-Use a `release-plz` job that runs `release-plz/action` with `command: release`, outputs `releases_created`, and extracts the first release tag with `jq`.
+Use a `release` job that derives the tag from Cargo metadata, checks whether the tag already exists, detects Release PR merges or manual dispatches, and creates the GitHub Release with `gh release create`.
 
 - [ ] **Step 2: Add release PR job**
 
@@ -40,7 +40,7 @@ Add a `release-plz-pr` job that runs `release-plz/action` with `command: release
 
 - [ ] **Step 3: Wire matrix build**
 
-Keep the current build matrix and change its condition to `needs.release-plz.outputs.releases_created == 'true'`; checkout and upload against `needs.release-plz.outputs.tag_name`.
+Keep the current build matrix and change its condition to `needs.release.outputs.releases_created == 'true'`; checkout and upload against `needs.release.outputs.tag_name`.
 
 ### Task 3: Add Release-plz Config
 
