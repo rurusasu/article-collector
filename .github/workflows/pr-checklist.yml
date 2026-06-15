@@ -30,6 +30,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install Taplo
+        run: cargo install taplo-cli --version 0.10.0 --locked
+
       - name: Verify PR checklist
         env:
           GH_TOKEN: ${{ github.token }}

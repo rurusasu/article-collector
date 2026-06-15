@@ -68,6 +68,26 @@ jobs:
       - name: Verify release build
         run: cargo build --release --locked
 
+  toml-check:
+    name: TOML Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install Taplo
+        run: cargo install taplo-cli --version 0.10.0 --locked
+
+      - name: Check TOML formatting
+        run: taplo format --check Cargo.toml article-collector.toml
+
+      - name: Run TOML lint
+        run: taplo lint Cargo.toml article-collector.toml
+
   script-lint:
     name: Script Lint
     runs-on: ubuntu-latest

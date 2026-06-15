@@ -24,6 +24,7 @@ graph TB
 | Job | 内容 | キャッシュ |
 |-----|------|-----------|
 | Rust Check | `cargo fmt --check`, `cargo clippy --all-targets`, `cargo test --locked`, `cargo build --release --locked` | cargo registry & build |
+| TOML Check | `taplo format --check`, `taplo lint` | なし |
 | Script Lint | `scripts/*.sh` の shellcheck | なし |
 
 旧シェル実装と bats テストは削除済み。記事取得・翻訳・保存の検証は Rust ユニットテストで行う。

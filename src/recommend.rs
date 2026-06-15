@@ -8,9 +8,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::config::{RecommendConfig, RecommendSourceConfig};
 use crate::fetch;
 use crate::paths;
-use crate::sites::{self, RecommendSource};
+use crate::sites::{self, RecommendSource, Site};
 
 #[derive(Debug, PartialEq, Eq)]
 struct LinkCandidate {
@@ -51,8 +52,17 @@ enum RecommendationTarget<'a> {
 }
 
 const MAX_LIMIT: usize = 100;
+const DEFAULT_LIMIT: usize = 30;
 const ALL_TARGET: &str = "all";
 const USER_AGENT: &str = concat!("article-collector/", env!("CARGO_PKG_VERSION"));
+
+#[derive(Debug)]
+struct SourcePlan {
+    site_name: &'static str,
+    source: RecommendSource,
+    limit: usize,
+    query: Option<String>,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecommendationCollection {
@@ -64,23 +74,30 @@ pub struct RecommendationCollection {
 
 pub async fn collect_recommended(
     target: &str,
-    limit: usize,
+    limit: Option<usize>,
     query: Option<&str>,
+    config: &RecommendConfig,
 ) -> Result<RecommendationCollection> {
-    validate_limit(limit)?;
-
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
     let items = match recommendation_target {
         RecommendationTarget::AllSources => {
             reject_query_override(query)?;
-            collect_all_sources(limit).await?
+            collect_all_sources(limit, config).await?
         }
         RecommendationTarget::Source { site_name, source } => {
-            collect_source(site_name, source, limit, query).await?
+            let plan = source_plan_for_parts(site_name, source, limit, query, config)?;
+            collect_source(
+                plan.site_name,
+                plan.source,
+                plan.limit,
+                plan.query.as_deref(),
+            )
+            .await?
         }
         RecommendationTarget::PageLinks { url } => {
             reject_query_override(query)?;
+            let limit = effective_limit(limit, config.limit, None)?;
             collect_page_links(url, "generic-web", None, limit).await?
         }
     };
@@ -101,7 +118,7 @@ pub async fn collect_recommended(
     );
     Ok(RecommendationCollection {
         item_count: items.len(),
-        source_count: source_count_for_target(target)?,
+        source_count: source_count_for_target(target, config)?,
         raw_path,
         translation_required,
     })
@@ -163,9 +180,9 @@ fn is_all_target(target: &str) -> bool {
     target.trim().eq_ignore_ascii_case(ALL_TARGET)
 }
 
-fn source_count_for_target(target: &str) -> Result<usize> {
+fn source_count_for_target(target: &str, config: &RecommendConfig) -> Result<usize> {
     Ok(match resolve_recommendation_target(target)? {
-        RecommendationTarget::AllSources => sites::recommendable_sites().len(),
+        RecommendationTarget::AllSources => source_plans_for_all(None, config)?.len(),
         RecommendationTarget::Source { .. } | RecommendationTarget::PageLinks { .. } => 1,
     })
 }
@@ -691,30 +708,136 @@ fn normalize_arxiv_url(url: &str) -> String {
         .unwrap_or_else(|| url.trim().to_string())
 }
 
-async fn collect_all_sources(limit: usize) -> Result<Vec<Value>> {
-    let recommendable_sites = sites::recommendable_sites();
+async fn collect_all_sources(limit: Option<usize>, config: &RecommendConfig) -> Result<Vec<Value>> {
+    let source_plans = source_plans_for_all(limit, config)?;
     let mut items = Vec::new();
 
-    for site in recommendable_sites {
-        let source = site
-            .recommend
-            .context("recommendable site must have a recommend source")?;
-        let mut site_items = collect_source(site.name, source, limit, None)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to collect recommended articles for site '{}'",
-                    site.name
-                )
-            })?;
+    for plan in source_plans {
+        let mut site_items = collect_source(
+            plan.site_name,
+            plan.source,
+            plan.limit,
+            plan.query.as_deref(),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to collect recommended articles for site '{}'",
+                plan.site_name
+            )
+        })?;
         if site_items.is_empty() {
-            bail!("No recommended articles found for site '{}'", site.name);
+            bail!(
+                "No recommended articles found for site '{}'",
+                plan.site_name
+            );
         }
 
         items.append(&mut site_items);
     }
 
     Ok(items)
+}
+
+fn source_plans_for_all(
+    cli_limit: Option<usize>,
+    config: &RecommendConfig,
+) -> Result<Vec<SourcePlan>> {
+    let mut plans = Vec::new();
+    for site in configured_recommendable_sites(config)? {
+        if source_config_for(site.name, config).and_then(|source| source.enabled) == Some(false) {
+            continue;
+        }
+        plans.push(source_plan_for_site(site, cli_limit, None, config)?);
+    }
+    if plans.is_empty() {
+        bail!("No enabled recommendation sources configured");
+    }
+    Ok(plans)
+}
+
+fn configured_recommendable_sites(config: &RecommendConfig) -> Result<Vec<&'static Site>> {
+    let Some(source_names) = config.sources.as_ref().filter(|names| !names.is_empty()) else {
+        return Ok(sites::recommendable_sites());
+    };
+
+    source_names
+        .iter()
+        .map(|name| {
+            let site = sites::site_by_name(name)
+                .with_context(|| format!("Unknown recommendation source in config: {name}"))?;
+            site.recommend
+                .map(|_| site)
+                .with_context(|| format!("No recommendation source configured for site '{name}'"))
+        })
+        .collect()
+}
+
+fn source_plan_for_site(
+    site: &'static Site,
+    cli_limit: Option<usize>,
+    cli_query: Option<&str>,
+    config: &RecommendConfig,
+) -> Result<SourcePlan> {
+    let source = site
+        .recommend
+        .context("recommendable site must have a recommend source")?;
+    source_plan_for_parts(site.name, source, cli_limit, cli_query, config)
+}
+
+fn source_plan_for_parts(
+    site_name: &'static str,
+    source: RecommendSource,
+    cli_limit: Option<usize>,
+    cli_query: Option<&str>,
+    config: &RecommendConfig,
+) -> Result<SourcePlan> {
+    let source_config = source_config_for(site_name, config);
+    let source_limit = source_config.and_then(|source| source.limit);
+    let query = effective_query(cli_query, source_config);
+    let limit = effective_limit(cli_limit, config.limit, source_limit)?;
+
+    Ok(SourcePlan {
+        site_name,
+        source,
+        limit,
+        query,
+    })
+}
+
+fn source_config_for<'a>(
+    site_name: &str,
+    config: &'a RecommendConfig,
+) -> Option<&'a RecommendSourceConfig> {
+    config.source.get(site_name)
+}
+
+fn effective_limit(
+    cli_limit: Option<usize>,
+    config_limit: Option<usize>,
+    source_limit: Option<usize>,
+) -> Result<usize> {
+    let limit = cli_limit
+        .or(source_limit)
+        .or(config_limit)
+        .unwrap_or(DEFAULT_LIMIT);
+    validate_limit(limit)?;
+    Ok(limit)
+}
+
+fn effective_query(
+    cli_query: Option<&str>,
+    source_config: Option<&RecommendSourceConfig>,
+) -> Option<String> {
+    cli_query
+        .filter(|query| !query.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            source_config
+                .and_then(|source| source.query.as_deref())
+                .filter(|query| !query.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
 }
 
 async fn collect_source(
@@ -860,6 +983,8 @@ fn normalize_link_text(text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{RecommendConfig, RecommendSourceConfig};
+    use std::collections::BTreeMap;
 
     /// 検証: Hacker News の site 名は topstories 収集として扱う
     /// 理由: 長い HN item URL を毎回入力せずに recommend を実行できるようにする
@@ -990,11 +1115,91 @@ mod tests {
     /// リスク: 最初の site だけで上限を使い切り、後続 site から取得されない
     #[test]
     fn counts_all_sources_from_site_registry() {
+        let config = RecommendConfig::default();
         assert_eq!(
-            source_count_for_target("all").unwrap(),
+            source_count_for_target("all", &config).unwrap(),
             sites::recommendable_sites().len()
         );
-        assert_eq!(source_count_for_target("hackernews").unwrap(), 1);
+        assert_eq!(source_count_for_target("hackernews", &config).unwrap(), 1);
+    }
+
+    /// 検証: all は source 別 config で arXiv query と source limit を上書きする
+    /// 理由: #news 用に arXiv の取得カテゴリだけを設定ファイルから調整したい
+    /// リスク: all 実行時に registry 既定 query しか使えず、LLM/RAG/agent 寄りの論文収集に寄せられない
+    #[test]
+    fn all_source_plans_apply_arxiv_config_query_and_source_limit() {
+        let config = RecommendConfig {
+            limit: Some(30),
+            sources: Some(vec!["arxiv".to_string()]),
+            source: BTreeMap::from([(
+                "arxiv".to_string(),
+                RecommendSourceConfig {
+                    limit: Some(10),
+                    query: Some("cat:cs.IR OR cat:cs.SE".to_string()),
+                    ..Default::default()
+                },
+            )]),
+        };
+
+        let plans = source_plans_for_all(None, &config).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].site_name, "arxiv");
+        assert_eq!(plans[0].limit, 10);
+        assert_eq!(plans[0].query.as_deref(), Some("cat:cs.IR OR cat:cs.SE"));
+    }
+
+    /// 検証: all は config の source 順序を使い、enabled=false の source を除外する
+    /// 理由: cron 用の all 実行で収集対象を設定ファイル側から安定して制御したい
+    /// リスク: 不要 source を止められず、翻訳対象が増えたり外部 API failure に巻き込まれる
+    #[test]
+    fn all_source_plans_use_config_source_order_and_skip_disabled_sources() {
+        let config = RecommendConfig {
+            sources: Some(vec![
+                "zenn".to_string(),
+                "hackernews".to_string(),
+                "devto".to_string(),
+            ]),
+            source: BTreeMap::from([(
+                "devto".to_string(),
+                RecommendSourceConfig {
+                    enabled: Some(false),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let plans = source_plans_for_all(None, &config).unwrap();
+        let names = plans.iter().map(|plan| plan.site_name).collect::<Vec<_>>();
+
+        assert_eq!(names, vec!["zenn", "hackernews"]);
+    }
+
+    /// 検証: arXiv 単体実行では CLI 指定が config より優先される
+    /// 理由: 一時的な手動収集では config を編集せず query/limit を上書きしたい
+    /// リスク: CLI で明示した query が config に隠れて、意図と違うカテゴリを取得する
+    #[test]
+    fn direct_arxiv_plan_prefers_cli_query_and_limit_over_config() {
+        let config = RecommendConfig {
+            limit: Some(30),
+            source: BTreeMap::from([(
+                "arxiv".to_string(),
+                RecommendSourceConfig {
+                    limit: Some(10),
+                    query: Some("cat:cs.IR".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let site = sites::site_by_name("arxiv").unwrap();
+
+        let plan = source_plan_for_site(site, Some(5), Some("cat:cs.SE"), &config).unwrap();
+
+        assert_eq!(plan.site_name, "arxiv");
+        assert_eq!(plan.limit, 5);
+        assert_eq!(plan.query.as_deref(), Some("cat:cs.SE"));
     }
 
     /// 検証: limit は 1 以上 100 以下だけ許可する
@@ -1224,7 +1429,8 @@ mod tests {
     /// リスク: ある site の source が壊れても all 実行まで気づけない
     #[tokio::test]
     async fn collects_recommendations_from_every_registered_site() {
-        let items = collect_all_sources(1).await.unwrap();
+        let config = RecommendConfig::default();
+        let items = collect_all_sources(Some(1), &config).await.unwrap();
         let collected_sites = items
             .iter()
             .filter_map(|item| item.get("site").and_then(Value::as_str))
