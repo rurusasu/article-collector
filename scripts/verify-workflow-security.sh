@@ -5,7 +5,7 @@ set -euo pipefail
 CHECKOUT_REF="9f698171ed81b15d1823a05fc7211befd50c8ae0"          # actions/checkout v6.0.3
 CACHE_REF="27d5ce7f107fe9357f9df03efb73ab90386fccae"             # actions/cache v5.0.5
 APP_TOKEN_REF="bcd2ba49218906704ab6c1aa796996da409d3eb1"         # actions/create-github-app-token v3.2.0
-RELEASE_PLEASE_REF="45996ed1f6d02564a971a2fa1b5860e934307cf7"    # googleapis/release-please-action v5.0.0
+RELEASE_PLZ_REF="e8792575c7f2366cf6ff3ccc33ead9ace5b691c7"       # release-plz/action v0.5.130
 
 failures=0
 
@@ -82,13 +82,19 @@ ci=".github/workflows/ci.yml"
 pr_checklist=".github/workflows/pr-checklist.yml"
 
 require_contains "$release" "uses: actions/create-github-app-token@$APP_TOKEN_REF" "release workflow creates a GitHub App token from a pinned action"
-require_contains "$release" "uses: googleapis/release-please-action@$RELEASE_PLEASE_REF" "release-please action is pinned and Node 24 compatible"
+require_contains "$release" "uses: release-plz/action@$RELEASE_PLZ_REF" "release-plz action is pinned"
 require_contains "$release" "client-id: \${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}" "release workflow uses GitHub App client ID secret"
-require_contains "$release" "token: \${{ steps.release-token.outputs.token }}" "release-please uses the GitHub App token"
+require_contains "$release" "command: release" "release-plz release command is configured"
+require_contains "$release" "command: release-pr" "release-plz release-pr command is configured"
+require_contains "$release" "GITHUB_TOKEN: \${{ steps.release-token.outputs.token }}" "release-plz uses the GitHub App token"
+require_contains "$release" "releases_created: \${{ steps.release.outputs.releases_created }}" "release workflow exposes release-plz releases_created output"
+require_contains "$release" "tag_name: \${{ steps.release-tag.outputs.tag_name }}" "release workflow exposes parsed release tag"
+require_contains "$release" "jq -r '.[0].tag // empty'" "release workflow parses the release-plz tag from JSON output"
 require_contains "$release" "GH_TOKEN: \${{ steps.release-token.outputs.token }}" "release asset uploads use the GitHub App token"
 require_contains "$release" "permission-contents: write" "release token requests contents write"
 require_contains "$release" "permission-pull-requests: write" "release token requests pull request write"
 require_not_contains "$release" "  contents: write" "GITHUB_TOKEN is not granted contents write in release workflow"
+require_not_contains "$release" "release-please-action" "release workflow no longer uses release-please"
 require_not_contains "$release" "permission-workflows:" "release GitHub App token cannot edit workflow files"
 require_not_contains "$release" "permission-actions:" "release GitHub App token cannot manage Actions"
 require_not_contains "$release" "permission-secrets:" "release GitHub App token cannot manage repository secrets"
@@ -96,6 +102,7 @@ require_not_contains "$release" "app-id:" "release workflow avoids deprecated cr
 
 require_contains "$ci" "permissions:" "CI declares explicit GITHUB_TOKEN permissions"
 require_contains "$ci" "release-pr-scope:" "CI verifies release PR file scope"
+require_contains "$ci" "if: startsWith(github.head_ref, 'release-plz-')" "CI scopes release PR guard to release-plz branches"
 require_contains "$ci" "bash scripts/verify-release-pr-scope.sh \"\$PR_NUMBER\"" "CI runs the release PR scope guard"
 require_contains "$pr_checklist" "pull-requests: read" "PR checklist workflow can read PR metadata only"
 require_not_contains "$pr_checklist" "pull-requests: write" "PR checklist workflow cannot write PRs"
