@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use crate::config::{RecommendConfig, RecommendSourceConfig};
 use crate::fetch;
 use crate::paths;
+use crate::recommend_history::{default_history_path, RecommendationHistory};
 use crate::sites::{self, RecommendSource, Site};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -80,7 +81,7 @@ pub async fn collect_recommended(
 ) -> Result<RecommendationCollection> {
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
-    let items = match recommendation_target {
+    let mut items = match recommendation_target {
         RecommendationTarget::AllSources => {
             reject_query_override(query)?;
             collect_all_sources(limit, config).await?
@@ -102,19 +103,28 @@ pub async fn collect_recommended(
         }
     };
 
-    if items.is_empty() {
-        bail!("No recommended articles found for {target}");
-    }
+    ensure_recommendations_found(target, &items)?;
+
+    let history_path = history_path_for_config(config)?;
+    let mut history = RecommendationHistory::open(&history_path)?;
+    let dedup_outcome = history.filter_new_items(items)?;
+    items = dedup_outcome.items;
+
+    ensure_new_recommendations(target, &items)?;
 
     let outdir = paths::outdir();
     fs::create_dir_all(&outdir)?;
     let raw_path = paths::raw_json_path();
     fs::write(&raw_path, serde_json::to_string_pretty(&items)?)?;
+    let recorded_count = history.record_seen_items(&items)?;
 
     eprintln!(
-        "Recommended articles collected: {} item(s) -> {}",
+        "Recommended articles collected: {} new item(s) -> {} ({} seen skipped, {} invalid skipped, {} recorded)",
         items.len(),
-        raw_path.display()
+        raw_path.display(),
+        dedup_outcome.skipped_seen,
+        dedup_outcome.skipped_invalid,
+        recorded_count
     );
     Ok(RecommendationCollection {
         item_count: items.len(),
@@ -185,6 +195,28 @@ fn source_count_for_target(target: &str, config: &RecommendConfig) -> Result<usi
         RecommendationTarget::AllSources => source_plans_for_all(None, config)?.len(),
         RecommendationTarget::Source { .. } | RecommendationTarget::PageLinks { .. } => 1,
     })
+}
+
+fn history_path_for_config(config: &RecommendConfig) -> Result<PathBuf> {
+    config
+        .history_path
+        .clone()
+        .map(Ok)
+        .unwrap_or_else(default_history_path)
+}
+
+fn ensure_recommendations_found(target: &str, items: &[Value]) -> Result<()> {
+    if items.is_empty() {
+        bail!("No recommended articles found for {target}");
+    }
+    Ok(())
+}
+
+fn ensure_new_recommendations(target: &str, items: &[Value]) -> Result<()> {
+    if items.is_empty() {
+        bail!("No new recommended articles found for {target}");
+    }
+    Ok(())
 }
 
 fn validate_limit(limit: usize) -> Result<()> {
@@ -985,6 +1017,7 @@ mod tests {
     use super::*;
     use crate::config::{RecommendConfig, RecommendSourceConfig};
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     /// 検証: Hacker News の site 名は topstories 収集として扱う
     /// 理由: 長い HN item URL を毎回入力せずに recommend を実行できるようにする
@@ -1123,6 +1156,61 @@ mod tests {
         assert_eq!(source_count_for_target("hackernews", &config).unwrap(), 1);
     }
 
+    /// 検証: 新規推薦が 0 件なら明示的なエラーにする
+    /// 理由: 既読しかない実行で翻訳や後続処理へ進まないようにする
+    /// リスク: 空の raw.json を成功として扱い、cron 結果が曖昧になる
+    #[test]
+    fn rejects_empty_new_recommendations() {
+        let error = ensure_new_recommendations("all", &[]).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "No new recommended articles found for all"
+        );
+    }
+
+    /// 検証: 履歴 DB での重複排除前に候補 0 件なら既存のエラーにする
+    /// 理由: source が候補を返さない失敗と、既読しかない失敗を区別する
+    /// リスク: 候補 0 件でも SQLite を作成し、all-seen と同じエラーに見える
+    #[tokio::test]
+    async fn rejects_empty_recommendation_candidates_before_history_filtering() {
+        let url = serve_empty_html_page().await;
+        let history_path = unique_temp_history_path("empty-candidates");
+        let config = RecommendConfig {
+            history_path: Some(history_path.clone()),
+            ..Default::default()
+        };
+
+        let error = collect_recommended(&url, Some(5), None, &config)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("No recommended articles found for {url}")
+        );
+        assert!(
+            !history_path.exists(),
+            "history DB should not be created when source returns no candidates"
+        );
+    }
+
+    /// 検証: config に履歴 DB path があればそれを優先する
+    /// 理由: cron と手動実行で同じ履歴を共有したい
+    /// リスク: default path だけに依存して環境差分を吸収できない
+    #[test]
+    fn history_path_prefers_config_value() {
+        let config = RecommendConfig {
+            history_path: Some(PathBuf::from("D:/article-collector-data/history.sqlite")),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            history_path_for_config(&config).unwrap(),
+            PathBuf::from("D:/article-collector-data/history.sqlite")
+        );
+    }
+
     /// 検証: all は source 別 config で arXiv query と source limit を上書きする
     /// 理由: #news 用に arXiv の取得カテゴリだけを設定ファイルから調整したい
     /// リスク: all 実行時に registry 既定 query しか使えず、LLM/RAG/agent 寄りの論文収集に寄せられない
@@ -1139,6 +1227,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         let plans = source_plans_for_all(None, &config).unwrap();
@@ -1422,6 +1511,37 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].url, "https://example.com/a");
         assert_eq!(links[1].url, "https://example.com/b");
+    }
+
+    async fn serve_empty_html_page() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buffer = [0_u8; 1024];
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let _ = socket.read(&mut request_buffer).await.unwrap();
+            let body = "<html><body>No links</body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}/empty")
+    }
+
+    fn unique_temp_history_path(name: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "article-collector-{name}-{}-{suffix}.sqlite",
+            std::process::id()
+        ))
     }
 
     /// 検証: registry に登録された全 recommend source から実際に記事を取得できる
