@@ -1139,6 +1139,7 @@ mod tests {
                     ..Default::default()
                 },
             )]),
+            ..Default::default()
         };
 
         let plans = source_plans_for_all(None, &config).unwrap();

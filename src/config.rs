@@ -17,6 +17,7 @@ pub struct ArticleCollectorConfig {
 pub struct RecommendConfig {
     pub limit: Option<usize>,
     pub sources: Option<Vec<String>>,
+    pub history_path: Option<PathBuf>,
     pub source: BTreeMap<String, RecommendSourceConfig>,
 }
 
@@ -82,6 +83,27 @@ mod tests {
         assert_eq!(
             config.recommend.source["arxiv"].query.as_deref(),
             Some("cat:cs.IR OR cat:cs.SE")
+        );
+    }
+
+    /// 検証: recommend history DB path を TOML から読める
+    /// 理由: cron や手動実行で同じ SQLite 履歴を明示的に共有したい
+    /// リスク: outdir が変わるたびに重複排除が効かなくなる
+    #[test]
+    fn parses_recommend_history_path() {
+        let config = parse_config(
+            r#"
+        [recommend]
+        history_path = "D:/article-collector-data/recommend-history.sqlite"
+        "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.recommend.history_path,
+            Some(std::path::PathBuf::from(
+                "D:/article-collector-data/recommend-history.sqlite"
+            ))
         );
     }
 
