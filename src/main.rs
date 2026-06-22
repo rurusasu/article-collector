@@ -2,6 +2,8 @@ mod config;
 mod fetch;
 mod paths;
 mod recommend;
+#[allow(dead_code)]
+mod recommend_history;
 mod save;
 mod sites;
 mod translate;
