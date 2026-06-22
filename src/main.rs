@@ -12,7 +12,11 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "article-collector", about = "記事取得 → 翻訳 → 保存 → PR")]
+#[command(
+    name = "article-collector",
+    version,
+    about = "記事取得 → 翻訳 → 保存 → PR"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
