@@ -3,6 +3,7 @@ use chrono::Utc;
 use reqwest::Url;
 use rusqlite::{params, Connection};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -83,6 +84,7 @@ impl RecommendationHistory {
 
     pub fn filter_new_items(&self, items: Vec<Value>) -> Result<DedupOutcome> {
         let mut filtered = Vec::new();
+        let mut accepted_keys: HashSet<String> = HashSet::new();
         let mut skipped_seen = 0;
         let mut skipped_invalid = 0;
 
@@ -93,6 +95,11 @@ impl RecommendationHistory {
             };
 
             if self.contains_key(&record.dedupe_key)? {
+                skipped_seen += 1;
+                continue;
+            }
+
+            if !accepted_keys.insert(record.dedupe_key) {
                 skipped_seen += 1;
                 continue;
             }
@@ -277,6 +284,37 @@ mod tests {
             .unwrap();
 
         assert_eq!(outcome.items, vec![first_new, second_new]);
+        assert_eq!(outcome.skipped_seen, 1);
+        assert_eq!(outcome.skipped_invalid, 0);
+    }
+
+    #[test]
+    fn filter_new_items_dedupes_duplicate_canonical_urls_in_batch() {
+        let store = RecommendationHistory::in_memory_for_tests().unwrap();
+        let first = json!({
+            "source": "generic-web",
+            "site": "example",
+            "title": "First fragment",
+            "url": "https://example.com/story#one"
+        });
+        let duplicate = json!({
+            "source": "generic-web",
+            "site": "example",
+            "title": "Second fragment",
+            "url": "https://example.com/story#two"
+        });
+        let later = json!({
+            "source": "generic-web",
+            "site": "example",
+            "title": "Later unique",
+            "url": "https://example.com/later"
+        });
+
+        let outcome = store
+            .filter_new_items(vec![first.clone(), duplicate, later.clone()])
+            .unwrap();
+
+        assert_eq!(outcome.items, vec![first, later]);
         assert_eq!(outcome.skipped_seen, 1);
         assert_eq!(outcome.skipped_invalid, 0);
     }
