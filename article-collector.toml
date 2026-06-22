@@ -1,6 +1,7 @@
 [recommend]
 sources = ["hackernews", "devto", "zenn", "arxiv"]
 limit = 30
+# history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 [recommend.source.arxiv]
 limit = 10
