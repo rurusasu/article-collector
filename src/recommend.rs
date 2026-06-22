@@ -103,6 +103,8 @@ pub async fn collect_recommended(
         }
     };
 
+    ensure_recommendations_found(target, &items)?;
+
     let history_path = history_path_for_config(config)?;
     let mut history = RecommendationHistory::open(&history_path)?;
     let dedup_outcome = history.filter_new_items(items)?;
@@ -201,6 +203,13 @@ fn history_path_for_config(config: &RecommendConfig) -> Result<PathBuf> {
         .clone()
         .map(Ok)
         .unwrap_or_else(default_history_path)
+}
+
+fn ensure_recommendations_found(target: &str, items: &[Value]) -> Result<()> {
+    if items.is_empty() {
+        bail!("No recommended articles found for {target}");
+    }
+    Ok(())
 }
 
 fn ensure_new_recommendations(target: &str, items: &[Value]) -> Result<()> {
@@ -1160,6 +1169,32 @@ mod tests {
         );
     }
 
+    /// 検証: 履歴 DB での重複排除前に候補 0 件なら既存のエラーにする
+    /// 理由: source が候補を返さない失敗と、既読しかない失敗を区別する
+    /// リスク: 候補 0 件でも SQLite を作成し、all-seen と同じエラーに見える
+    #[tokio::test]
+    async fn rejects_empty_recommendation_candidates_before_history_filtering() {
+        let url = serve_empty_html_page().await;
+        let history_path = unique_temp_history_path("empty-candidates");
+        let config = RecommendConfig {
+            history_path: Some(history_path.clone()),
+            ..Default::default()
+        };
+
+        let error = collect_recommended(&url, Some(5), None, &config)
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("No recommended articles found for {url}")
+        );
+        assert!(
+            !history_path.exists(),
+            "history DB should not be created when source returns no candidates"
+        );
+    }
+
     /// 検証: config に履歴 DB path があればそれを優先する
     /// 理由: cron と手動実行で同じ履歴を共有したい
     /// リスク: default path だけに依存して環境差分を吸収できない
@@ -1476,6 +1511,37 @@ mod tests {
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].url, "https://example.com/a");
         assert_eq!(links[1].url, "https://example.com/b");
+    }
+
+    async fn serve_empty_html_page() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buffer = [0_u8; 1024];
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let _ = socket.read(&mut request_buffer).await.unwrap();
+            let body = "<html><body>No links</body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}/empty")
+    }
+
+    fn unique_temp_history_path(name: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "article-collector-{name}-{}-{suffix}.sqlite",
+            std::process::id()
+        ))
     }
 
     /// 検証: registry に登録された全 recommend source から実際に記事を取得できる
