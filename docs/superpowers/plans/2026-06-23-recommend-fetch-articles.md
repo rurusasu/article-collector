@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `article-collector recommend <target> --fetch-articles` so recommendation candidates can be fetched as full articles, translated per article, and written as local run artifacts.
+**Goal:** Add config-controlled article fetching for `article-collector recommend <target>` so recommendation candidates can be fetched as full articles, translated per article, and written as local run artifacts when `[recommend].fetch_articles = true`.
 
-**Architecture:** Keep recommendation source collection in `recommend.rs`, reuse existing article fetching from `fetch.rs`, reuse ACP translation from `translate.rs`, and add a focused `recommend_artifacts.rs` module for local outdir artifacts. `--fetch-articles` works for every target, writes only fetched article artifacts, records SQLite seen items only after article translation succeeds, skips PDFs for now, and never writes to the target repo or creates PRs.
+**Architecture:** Keep recommendation source collection in `recommend.rs`, reuse existing article fetching from `fetch.rs`, reuse ACP translation from `translate.rs`, and add a focused `recommend_artifacts.rs` module for local outdir artifacts. `[recommend].fetch_articles = true` works for every target, writes only fetched article artifacts, records SQLite seen items only after article translation succeeds, skips PDFs for now, and never writes to the target repo or creates PRs.
 
 **Tech Stack:** Rust stable, clap, tokio, reqwest, serde_json, scraper/regex existing fetch stack, SQLite history through existing `recommend_history.rs`, ACP translation through existing `translate.rs`.
 
@@ -13,9 +13,12 @@
 ## File Structure
 
 - Modify: `src/main.rs`
-  - Add `fetch_articles: bool` to the `Recommend` CLI variant.
-  - Pass the flag into `recommend::collect_recommended`.
-  - Do not call the old single `translate(raw.json)` path after `recommend --fetch-articles`.
+  - Continue loading `article-collector.toml` through the existing `--config <PATH>` option.
+  - Pass `app_config.recommend.fetch_articles` into `recommend::collect_recommended`.
+  - Do not call the old single `translate(raw.json)` path when `[recommend].fetch_articles = true`.
+- Modify: `src/config.rs`
+  - Add `fetch_articles: bool` to `RecommendConfig`.
+  - Keep the default value `false` through serde defaults so existing configs preserve current behavior.
 - Modify: `src/fetch.rs`
   - Extract existing file-writing fetch code into `fetch_url_items(url) -> Result<Vec<Value>>`.
   - Keep `fetch_url(url)` as a wrapper that writes `raw.json`.
@@ -25,8 +28,8 @@
   - Keep existing `translate(input)` behavior for current commands.
 - Modify: `src/recommend.rs`
   - Add `fetch_articles` orchestration after SQLite dedupe.
-  - In `--fetch-articles` mode, only record seen items that completed article translation.
-  - Keep the non-`--fetch-articles` path behavior unchanged.
+  - In config-enabled article-fetch mode, only record seen items that completed article translation.
+  - Keep the default non-article-fetch path behavior unchanged.
 - Create: `src/recommend_artifacts.rs`
   - Own `recommended_articles/`.
   - Own per-article JSON writes.
@@ -36,13 +39,14 @@
 - Modify: `src/paths.rs`
   - Add helper paths for `recommended_articles/` and `recommend-fetch-failures.json`.
 - Modify: `README.md`
-  - Document `--fetch-articles`, all-target support, per-article artifacts, failure behavior, SQLite seen behavior, PDF coming soon, and `ACP_AGENT` behavior.
+  - Document `[recommend].fetch_articles`, all-target support, per-article artifacts, failure behavior, SQLite seen behavior, PDF coming soon, and `ACP_AGENT` behavior.
 
 ---
 
 ## Behavior Contract
 
-- `--fetch-articles` is opt-in CLI-only.
+- `[recommend].fetch_articles = true` is opt-in TOML config. The default is `false`.
+- Do not add a `--fetch-articles` CLI flag; command lines stay stable and `--config <PATH>` selects the config file.
 - It works for `all`, site names, and URL targets.
 - PDFs are not fetched in this release. They are recorded in `recommend-fetch-failures.json` with stage `unsupported_pdf`; README marks PDF extraction as coming soon.
 - Fetch success writes `recommended_articles/*.json`.
@@ -58,24 +62,47 @@
   - SQLite seen records are inserted only for translated articles.
   - Translation failure preserves the per-article JSON and records a failure entry.
   - If zero articles translate successfully, return non-zero.
-- Target repo / PR behavior is out of scope for `recommend --fetch-articles`.
+- Target repo / PR behavior is out of scope for config-enabled recommend article fetching.
 
 ---
 
-### Task 1: CLI Flag And Path Helpers
+### Task 1: Config Switch And Path Helpers
 
 **Files:**
+- Modify: `src/config.rs`
 - Modify: `src/main.rs`
 - Modify: `src/paths.rs`
 - Modify: `tests/cli.rs`
 
-- [ ] **Step 1: Write failing CLI help test**
+- [ ] **Step 1: Write failing config parse test**
+
+Add to `src/config.rs` tests:
+
+```rust
+/// 検証: recommend article fetching の有効化を TOML から読める
+/// 理由: cron 実行では CLI option ではなく config file 側で取得モードを制御したい
+/// リスク: config に書いても通常の推薦一覧だけが出力され、記事本文取得に進まない
+#[test]
+fn parses_recommend_fetch_articles_switch() {
+    let config = parse_config(
+        r#"
+        [recommend]
+        fetch_articles = true
+        "#,
+    )
+    .unwrap();
+
+    assert!(config.recommend.fetch_articles);
+}
+```
+
+- [ ] **Step 2: Write failing CLI help test**
 
 Add to `tests/cli.rs`:
 
 ```rust
 #[test]
-fn recommend_help_lists_fetch_articles_flag() {
+fn recommend_help_does_not_list_fetch_articles_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_article-collector"))
         .args(["recommend", "--help"])
         .output()
@@ -89,13 +116,13 @@ fn recommend_help_lists_fetch_articles_flag() {
 
     let stdout = String::from_utf8(output.stdout).expect("help output should be valid UTF-8");
     assert!(
-        stdout.contains("--fetch-articles"),
-        "recommend help should list --fetch-articles:\n{stdout}"
+        !stdout.contains("--fetch-articles"),
+        "recommend help should not list removed --fetch-articles flag:\n{stdout}"
     );
 }
 ```
 
-- [ ] **Step 2: Write failing path helper tests**
+- [ ] **Step 3: Write failing path helper tests**
 
 Add to `src/paths.rs` tests:
 
@@ -111,28 +138,27 @@ fn recommend_article_paths_are_under_outdir() {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 4: Run tests to verify they fail**
 
 Run:
 
 ```bash
-cargo test --locked --test cli recommend_help_lists_fetch_articles_flag
+cargo test --locked config::tests::parses_recommend_fetch_articles_switch
+cargo test --locked --test cli recommend_help_does_not_list_fetch_articles_flag
 cargo test --locked paths::tests::recommend_article_paths_are_under_outdir
 ```
 
-Expected: FAIL because `--fetch-articles`, `recommended_articles_dir`, and `recommend_fetch_failures_path` do not exist.
+Expected: FAIL because `fetch_articles`, the removed CLI flag behavior, `recommended_articles_dir`, and `recommend_fetch_failures_path` do not exist yet.
 
-- [ ] **Step 4: Add CLI flag and path helpers**
+- [ ] **Step 5: Add config switch and path helpers**
 
-In `src/main.rs`, add to `Commands::Recommend`:
+In `src/config.rs`, add to `RecommendConfig`:
 
 ```rust
-/// 推薦 URL の記事本文も取得して記事別 artifact を作成
-#[arg(long)]
-fetch_articles: bool,
+pub fetch_articles: bool,
 ```
 
-Bind it as `_fetch_articles` in the `Recommend` match arm for now so this task compiles without changing recommend behavior. Task 5 passes it into `recommend::collect_recommended`.
+Remove the `fetch_articles` CLI field from `src/main.rs`. The struct already uses `#[serde(default)]`, so omitted configs preserve the current `false` behavior.
 
 In `src/paths.rs`, add:
 
@@ -146,22 +172,23 @@ pub fn recommend_fetch_failures_path() -> PathBuf {
 }
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 6: Run tests**
 
 Run:
 
 ```bash
-cargo test --locked --test cli recommend_help_lists_fetch_articles_flag
+cargo test --locked config::tests::parses_recommend_fetch_articles_switch
+cargo test --locked --test cli recommend_help_does_not_list_fetch_articles_flag
 cargo test --locked paths::tests::recommend_article_paths_are_under_outdir
 ```
 
-Expected: PASS. The flag exists in CLI help, but behavior is still unchanged until Task 5.
+Expected: PASS. The config switch parses and the CLI flag is absent, but behavior is still unchanged until Task 5.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/main.rs src/paths.rs tests/cli.rs
-git commit -m "feat: add recommend fetch articles flag"
+git add src/config.rs src/main.rs src/paths.rs tests/cli.rs
+git commit -m "feat: configure recommend article fetching"
 ```
 
 ---
@@ -629,7 +656,7 @@ pub fn write_translated_index(
     let mut lines = vec![
         "# Recommended Articles".to_string(),
         String::new(),
-        format!("Generated from `recommend {target} --fetch-articles`."),
+        format!("Generated from `recommend {target}` with `[recommend].fetch_articles = true`."),
         String::new(),
         "## Translated".to_string(),
         String::new(),
@@ -962,7 +989,7 @@ The `seen_items_for_fetch_articles` helper is the guardrail for the history cont
 
 - [ ] **Step 5: Update `main.rs` recommend arm**
 
-Pass the flag:
+Use the config switch:
 
 ```rust
 let collection = recommend::collect_recommended(
@@ -970,7 +997,6 @@ let collection = recommend::collect_recommended(
     limit,
     query.as_deref(),
     &app_config.recommend,
-    fetch_articles,
 )
 .await?;
 if collection.translation_required {
@@ -1006,10 +1032,15 @@ git commit -m "feat: fetch and translate recommended articles"
 
 Add under recommend quick-start examples:
 
+```toml
+[recommend]
+fetch_articles = true
+```
+
 ```bash
-article-collector recommend all --limit 30 --fetch-articles
-article-collector recommend hackernews --limit 10 --fetch-articles
-article-collector recommend https://example.com/links --limit 5 --fetch-articles
+article-collector recommend all --limit 30 --config article-collector.toml
+article-collector recommend hackernews --limit 10 --config article-collector.toml
+article-collector recommend https://example.com/links --limit 5 --config article-collector.toml
 ```
 
 - [ ] **Step 2: Document artifact layout**
@@ -1017,7 +1048,7 @@ article-collector recommend https://example.com/links --limit 5 --fetch-articles
 Add:
 
 ```markdown
-`--fetch-articles` を付けると、推薦一覧を取得した後に各 URL の記事本文も取得する。成果物は `ARTICLE_COLLECTOR_OUTDIR` 配下に作成される。
+`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。成果物は `ARTICLE_COLLECTOR_OUTDIR` 配下に作成される。
 
 ```text
 raw.json
@@ -1052,7 +1083,7 @@ PDF URL は現時点では本文取得対象外で、`recommend-fetch-failures.j
 Run:
 
 ```bash
-cargo test --locked --test cli recommend_help_lists_fetch_articles_flag
+cargo test --locked --test cli recommend_help_does_not_list_fetch_articles_flag
 ```
 
 Expected: PASS.
@@ -1105,9 +1136,17 @@ Expected: PASS.
 
 Use a temporary output directory and a temporary history path so the user's real history is not polluted:
 
-```bash
-$env:ARTICLE_COLLECTOR_OUTDIR = Join-Path $env:TEMP "article-collector-fetch-articles-smoke"
-cargo run -- recommend hackernews --limit 1 --fetch-articles --config article-collector.toml
+```powershell
+$smokeDir = Join-Path $env:TEMP "article-collector-fetch-articles-smoke"
+$configPath = Join-Path $smokeDir "article-collector.toml"
+New-Item -ItemType Directory -Force $smokeDir | Out-Null
+@"
+[recommend]
+fetch_articles = true
+history_path = "$(($smokeDir -replace '\\', '/') + '/recommend-history.sqlite')"
+"@ | Set-Content -Encoding utf8 $configPath
+$env:ARTICLE_COLLECTOR_OUTDIR = $smokeDir
+cargo run -- recommend hackernews --limit 1 --config $configPath
 ```
 
 Expected when `ACP_AGENT` is not set: command creates `recommended_articles/*.json`, does not create `translated.md`, and does not mark the item seen for translation success.

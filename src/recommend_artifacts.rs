@@ -98,7 +98,7 @@ pub fn write_translated_index(
     let mut lines = vec![
         "# Recommended Articles".to_string(),
         String::new(),
-        format!("Generated from `recommend {target} --fetch-articles`."),
+        format!("Generated from `recommend {target}` with `[recommend].fetch_articles = true`."),
         String::new(),
         "## Translated".to_string(),
         String::new(),
@@ -237,6 +237,8 @@ mod tests {
 
         let index = fs::read_to_string(outdir.join("translated.md")).unwrap();
         assert!(index.contains("# Recommended Articles"));
+        assert!(index
+            .contains("Generated from `recommend all` with `[recommend].fetch_articles = true`."));
         assert!(index.contains(
             "[Example Article](recommended_articles/001-hackernews-example-article_translated.md)"
         ));

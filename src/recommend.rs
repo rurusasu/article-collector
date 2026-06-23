@@ -80,7 +80,6 @@ pub async fn collect_recommended(
     limit: Option<usize>,
     query: Option<&str>,
     config: &RecommendConfig,
-    fetch_articles: bool,
 ) -> Result<RecommendationCollection> {
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
@@ -117,7 +116,7 @@ pub async fn collect_recommended(
 
     ensure_new_recommendations(target, &items)?;
 
-    if fetch_articles {
+    if config.fetch_articles {
         return collect_recommended_articles(
             target,
             items,
@@ -1409,7 +1408,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = collect_recommended(&url, Some(5), None, &config, false)
+        let error = collect_recommended(&url, Some(5), None, &config)
             .await
             .unwrap_err();
 
