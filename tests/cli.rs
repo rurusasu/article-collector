@@ -52,3 +52,23 @@ fn root_help_lists_save_and_pr_but_not_save_and_pr() {
         "help should not list removed save-and-pr command:\n{stdout}"
     );
 }
+
+#[test]
+fn recommend_help_lists_fetch_articles_flag() {
+    let output = Command::new(env!("CARGO_BIN_EXE_article-collector"))
+        .args(["recommend", "--help"])
+        .output()
+        .expect("run article-collector recommend --help");
+
+    assert!(
+        output.status.success(),
+        "expected recommend --help to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be valid UTF-8");
+    assert!(
+        stdout.contains("--fetch-articles"),
+        "recommend help should list --fetch-articles:\n{stdout}"
+    );
+}
