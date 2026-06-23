@@ -122,6 +122,31 @@ article-collector recommend all --limit 30
 article-collector recommend all --config article-collector.toml
 ```
 
+推薦 URL の記事本文も取得し、記事ごとの JSON / 翻訳 Markdown を作成する場合:
+
+```bash
+article-collector recommend all --limit 30 --fetch-articles
+article-collector recommend hackernews --limit 10 --fetch-articles
+article-collector recommend https://example.com/links --limit 5 --fetch-articles
+```
+
+`--fetch-articles` を付けると、推薦一覧を取得した後に各 URL の記事本文も取得する。成果物は `ARTICLE_COLLECTOR_OUTDIR` 配下に作成される。
+
+```text
+raw.json
+translated.md
+recommended_articles/
+  001-hackernews-example-title.json
+  001-hackernews-example-title_translated.md
+recommend-fetch-failures.json
+```
+
+`translated.md` は結合本文ではなく、記事別翻訳ファイルへの index として作成される。
+
+本文取得に失敗した URL は `raw.json` や `translated.md` には入れず、`recommend-fetch-failures.json` に `url`, `title`, `stage`, `error` を保存する。`ACP_AGENT` が未設定の場合は記事別 JSON だけを作成し、翻訳ファイル、`translated.md` index、SQLite seen 記録は作成しない。`ACP_AGENT` が設定されている場合、SQLite seen には記事別翻訳まで成功した item だけを記録する。
+
+PDF URL は現時点では本文取得対象外で、`recommend-fetch-failures.json` に `stage: "unsupported_pdf"` として記録される。PDF 本文抽出は coming soon。
+
 全工程を実行する場合:
 
 Codex を ACP 経由で使う場合:
@@ -158,6 +183,7 @@ export ACP_AGENT="gemini"
 | `article-collector save <URL>` | 翻訳済み Markdown を target repo の `article/<timestamp>` branch に保存 | target repo に Markdown ファイルを作成。commit / PR はしない |
 | `article-collector pr <PATH>` | 保存済み Markdown を commit / push して PR 作成 | `PATH` は target repo 相対 path または target repo 配下の絶対 path |
 | `article-collector recommend <SITE_OR_URL> --limit 30` | site 名または起点 URL からレコメンド/関連リンクを収集 | `raw.json` に推薦一覧を作成 |
+| `article-collector recommend <SITE_OR_URL> --limit 30 --fetch-articles` | 推薦 URL の記事本文も取得し、記事別 artifact を作成 | `recommended_articles/*.json` を作成。`ACP_AGENT` 設定時は `*_translated.md` と index `translated.md` も作成 |
 | `article-collector recommend arxiv --query "<QUERY>" --limit 10` | arXiv API query から新着論文を収集 | `raw.json` に論文推薦一覧を作成 |
 | `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集し、翻訳まで実行 | `raw.json` に推薦一覧を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
 | `article-collector recommend all --config article-collector.toml` | source 別 config を使って全 site から推薦記事を収集 | `raw.json` に推薦一覧を作成。arXiv query / source 別 limit を config で上書き |
