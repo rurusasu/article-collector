@@ -57,7 +57,7 @@ winget install Rustlang.Rustup
 
 ### GitHub CLI の認証
 
-`save-and-pr` / `collect` の保存ステップは `gh` CLI を使うため、事前に認証が必要:
+`pr` / `collect` の PR 作成ステップは `gh` CLI を使うため、事前に認証が必要:
 
 ```bash
 gh auth login
@@ -73,20 +73,21 @@ sequenceDiagram
     participant CLI as article-collector
     participant Fetch as fetch
     participant LLM as ACP agent
-    participant Save as save-and-pr
-    participant GitHub as GitHub
+    participant Save as save
+    participant Target as target_repos
 
     User->>CLI: article-collector collect <URL>
     CLI->>Fetch: fetch_url(URL)
     Fetch-->>CLI: raw.json
     CLI->>LLM: translate(raw.json)
     LLM-->>CLI: translated.md
-    CLI->>Save: save_and_pr(URL)
-    Save->>GitHub: create branch / commit / PR
+    CLI->>Target: prepare article branch
+    CLI->>Save: write Markdown
+    CLI->>Target: commit / push / PR
     alt AUTO_MERGE=true
-        Save->>GitHub: merge PR
+        Target->>Target: merge PR
     end
-    GitHub-->>User: PR or merged article
+    Target-->>User: PR or merged article
 ```
 
 ## クイックスタート
@@ -133,6 +134,14 @@ export TARGET_REPO="your-org/your-repo"
 article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
 
+翻訳済み Markdown の保存と PR 作成を分けて実行する場合:
+
+```bash
+article-collector save https://news.ycombinator.com/item?id=42575537
+article-collector pr articles/web/2026-06-23_example.md
+article-collector pr D:/tmp/article-collector-target-repo/articles/web/2026-06-23_example.md
+```
+
 Codex 以外の agent を使う場合だけ、`ACP_AGENT` に短い名前を指定する:
 
 ```bash
@@ -146,7 +155,8 @@ export ACP_AGENT="gemini"
 | `article-collector collect <URL>` | 取得、翻訳、保存、PR 作成をまとめて実行 | `raw.json` / `translated.md` を作成し、保存先 repo に PR を作成 |
 | `article-collector fetch <URL>` | URL から記事本文を取得 | `raw.json` を作成 |
 | `article-collector translate [INPUT_JSON]` | 取得済み JSON を翻訳。省略時は `raw.json` を読む | `translated.md` を作成 |
-| `article-collector save-and-pr <URL>` | 翻訳済み Markdown を保存して PR を作成 | 保存先 repo に branch / commit / PR を作成 |
+| `article-collector save <URL>` | 翻訳済み Markdown を target repo の `article/<timestamp>` branch に保存 | target repo に Markdown ファイルを作成。commit / PR はしない |
+| `article-collector pr <PATH>` | 保存済み Markdown を commit / push して PR 作成 | `PATH` は target repo 相対 path または target repo 配下の絶対 path |
 | `article-collector recommend <SITE_OR_URL> --limit 30` | site 名または起点 URL からレコメンド/関連リンクを収集 | `raw.json` に推薦一覧を作成 |
 | `article-collector recommend arxiv --query "<QUERY>" --limit 10` | arXiv API query から新着論文を収集 | `raw.json` に論文推薦一覧を作成 |
 | `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集し、翻訳まで実行 | `raw.json` に推薦一覧を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
@@ -165,7 +175,7 @@ export ACP_AGENT="gemini"
 | `AUTO_MERGE` | No | `true` | PR 作成後に merge する |
 
 \* 未指定または空文字の場合、翻訳は実行されず `translated.md` は作成されない。`collect` は保存/PR 作成に進まない。
-\*\* `save-and-pr` / `collect` の保存ステップのみ必要。
+\*\* `save` / `pr` / `collect` の保存・PR ステップのみ必要。
 
 ### TOML config
 
