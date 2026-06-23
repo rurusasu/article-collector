@@ -5,6 +5,7 @@ mod recommend;
 mod recommend_history;
 mod save;
 mod sites;
+mod target_repos;
 mod translate;
 mod youtube;
 
