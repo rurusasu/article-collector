@@ -54,7 +54,7 @@ fn root_help_lists_save_and_pr_but_not_save_and_pr() {
 }
 
 #[test]
-fn recommend_help_lists_fetch_articles_flag() {
+fn recommend_help_does_not_list_fetch_articles_flag() {
     let output = Command::new(env!("CARGO_BIN_EXE_article-collector"))
         .args(["recommend", "--help"])
         .output()
@@ -68,7 +68,7 @@ fn recommend_help_lists_fetch_articles_flag() {
 
     let stdout = String::from_utf8(output.stdout).expect("help output should be valid UTF-8");
     assert!(
-        stdout.contains("--fetch-articles"),
-        "recommend help should list --fetch-articles:\n{stdout}"
+        !stdout.contains("--fetch-articles"),
+        "recommend help should not list removed --fetch-articles flag:\n{stdout}"
     );
 }

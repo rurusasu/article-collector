@@ -17,6 +17,7 @@ pub struct ArticleCollectorConfig {
 pub struct RecommendConfig {
     pub limit: Option<usize>,
     pub sources: Option<Vec<String>>,
+    pub fetch_articles: bool,
     pub history_path: Option<PathBuf>,
     pub source: BTreeMap<String, RecommendSourceConfig>,
 }
@@ -105,6 +106,22 @@ mod tests {
                 "D:/article-collector-data/recommend-history.sqlite"
             ))
         );
+    }
+
+    /// 検証: recommend article fetching の有効化を TOML から読める
+    /// 理由: cron 実行では CLI option ではなく config file 側で取得モードを制御したい
+    /// リスク: config に書いても通常の推薦一覧だけが出力され、記事本文取得に進まない
+    #[test]
+    fn parses_recommend_fetch_articles_switch() {
+        let config = parse_config(
+            r#"
+        [recommend]
+        fetch_articles = true
+        "#,
+        )
+        .unwrap();
+
+        assert!(config.recommend.fetch_articles);
     }
 
     /// 検証: 未知 key は config parse error にする
