@@ -3,37 +3,128 @@ use chrono::Local;
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::{Component, Path, PathBuf};
 
 use crate::paths;
 use crate::sites;
 
-pub fn save_and_pr(url: &str) -> Result<()> {
-    let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
-    let target_dir = std::env::var("TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| paths::default_target_dir());
-    let save_path_template =
-        std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
-    let auto_merge = std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string());
+#[derive(Debug, PartialEq, Eq)]
+pub struct SavedArticle {
+    pub path: PathBuf,
+    pub repo_relative_path: PathBuf,
+    pub title: String,
+}
 
-    let now = Local::now().format("%Y-%m-%d").to_string();
-    let branch = format!("collect/{}", Local::now().format("%Y-%m-%d-%H%M%S"));
-
+pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArticle> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         bail!("Invalid URL: {url}");
     }
 
-    let article_type = determine_type(url);
-
-    // Extract title from raw.json
     let outdir = paths::outdir();
     let raw_path = outdir.join("raw.json");
+    let translated_path = paths::translated_md_path();
     let raw = fs::read_to_string(&raw_path).context("Failed to read raw.json")?;
     let data: Value = serde_json::from_str(&raw)?;
+    let translated = fs::read_to_string(&translated_path).unwrap_or_default();
+    let translated = append_embedded_translations(translated, &outdir);
 
-    let title = if let Some(arr) = data.as_array() {
+    if translated.is_empty() || translated.trim() == "null" {
+        bail!("Translation result is empty or null, aborting");
+    }
+
+    let save_path_template =
+        std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
+    let now = Local::now().format("%Y-%m-%d").to_string();
+
+    write_article_markdown_to_target(
+        target_root,
+        url,
+        &data,
+        &translated,
+        &save_path_template,
+        &now,
+    )
+}
+
+pub fn write_article_markdown_to_target(
+    target_root: &Path,
+    url: &str,
+    data: &Value,
+    translated: &str,
+    save_path_template: &str,
+    now: &str,
+) -> Result<SavedArticle> {
+    let title = extract_title(data);
+    let title = sanitize_title(title);
+    let slug = title_to_slug(&title);
+    let filename = format!("{now}_{slug}.md");
+    let article_type = determine_type(url);
+    let save_path = save_path_template.replace("${TYPE}", &article_type);
+    let dest_file = ensure_path_under_root(target_root, &Path::new(&save_path).join(&filename))?;
+    let dest_dir = dest_file
+        .parent()
+        .context("resolved article path has no parent directory")?;
+    fs::create_dir_all(dest_dir)?;
+    let content = build_article_markdown(data, translated, url, now)?;
+    fs::write(&dest_file, content)?;
+
+    Ok(SavedArticle {
+        path: dest_file,
+        repo_relative_path: PathBuf::from(save_path).join(filename),
+        title,
+    })
+}
+
+fn ensure_path_under_root(target_root: &Path, relative_path: &Path) -> Result<PathBuf> {
+    let target_root = normalize_path(target_root);
+    let dest_file = normalize_path(&target_root.join(relative_path));
+
+    if !dest_file.starts_with(&target_root) {
+        bail!(
+            "Save path {} is outside target root {}",
+            dest_file.display(),
+            target_root.display()
+        );
+    }
+
+    Ok(dest_file)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
+}
+
+pub fn build_article_markdown(
+    data: &Value,
+    translated: &str,
+    url: &str,
+    now: &str,
+) -> Result<String> {
+    if translated.is_empty() || translated.trim() == "null" {
+        bail!("Translation result is empty or null, aborting");
+    }
+
+    let title = sanitize_title(extract_title(data));
+    let article_type = determine_type(url);
+    let frontmatter = format!(
+        "---\ntitle: \"{title}\"\ntype: {article_type}\nurl: \"{url}\"\ncreated: {now}\ntags: []\n---\n\n"
+    );
+
+    Ok(format!("{frontmatter}{translated}"))
+}
+
+fn extract_title(data: &Value) -> &str {
+    if let Some(arr) = data.as_array() {
         arr.first()
             .and_then(|item| {
                 item.get("title").and_then(|t| t.as_str()).or_else(|| {
@@ -47,89 +138,21 @@ pub fn save_and_pr(url: &str) -> Result<()> {
         data.get("title")
             .and_then(|t| t.as_str())
             .unwrap_or("untitled")
-    };
-
-    let title = sanitize_title(title);
-    let slug = title_to_slug(&title);
-
-    let filename = format!("{now}_{slug}.md");
-    let save_path = save_path_template.replace("${TYPE}", &article_type);
-    let dest_dir = target_dir.join(&save_path);
-
-    // Clone or update target repo
-    if target_dir.join(".git").exists() {
-        run_git(&target_dir, &["checkout", "main"])?;
-        run_git(&target_dir, &["pull", "origin", "main"])?;
-    } else {
-        let target_dir_arg = target_dir.to_string_lossy().to_string();
-        run_cmd("gh", &["repo", "clone", &target_repo, &target_dir_arg])?;
     }
+}
 
-    // Create branch
-    run_git(&target_dir, &["checkout", "-b", &branch])?;
-
-    // Create output file with frontmatter
-    fs::create_dir_all(&dest_dir)?;
-    let dest_file = dest_dir.join(&filename);
-
-    let frontmatter = format!(
-        "---\ntitle: \"{title}\"\ntype: {article_type}\nurl: \"{url}\"\ncreated: {now}\ntags: []\n---\n\n"
-    );
-
-    let translated_path = paths::translated_md_path();
-    let translated = fs::read_to_string(&translated_path).unwrap_or_default();
-
-    // Validate
-    if translated.is_empty() || translated.trim() == "null" {
-        bail!("Translation result is empty or null, aborting");
-    }
-
-    let mut content = format!("{frontmatter}{translated}");
-
-    // Append embedded translated articles
-    if let Ok(entries) = fs::read_dir(&outdir) {
+fn append_embedded_translations(mut translated: String, outdir: &Path) -> String {
+    if let Ok(entries) = fs::read_dir(outdir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with("embedded_") && name.ends_with("_translated.md") {
                 let emb = fs::read_to_string(entry.path()).unwrap_or_default();
-                content.push_str("\n\n---\n\n## 関連記事\n\n");
-                content.push_str(&emb);
+                translated.push_str("\n\n---\n\n## 関連記事\n\n");
+                translated.push_str(&emb);
             }
         }
     }
-
-    fs::write(&dest_file, &content)?;
-
-    // Commit + PR
-    let rel_path = format!("{save_path}{filename}");
-    run_git(&target_dir, &["add", &rel_path])?;
-    run_git(&target_dir, &["commit", "-m", &format!("collect: {title}")])?;
-    run_git(&target_dir, &["push", "-u", "origin", &branch])?;
-
-    let pr_body = format!("## Collected Article\n\n- `{rel_path}` — {title}\n\nSource: {url}");
-    run_cmd_in(
-        &target_dir,
-        "gh",
-        &[
-            "pr",
-            "create",
-            "--title",
-            &format!("collect: {now} {title}"),
-            "--body",
-            &pr_body,
-        ],
-    )?;
-
-    if auto_merge == "true" {
-        run_cmd_in(&target_dir, "gh", &["pr", "merge", "--merge"])?;
-    }
-
-    // Return to main
-    run_git(&target_dir, &["checkout", "main"])?;
-    run_git(&target_dir, &["pull", "origin", "main"])?;
-
-    eprintln!("Done: {}", dest_file.display());
-    Ok(())
+    translated
 }
 
 pub fn sanitize_title(title: &str) -> String {
@@ -154,34 +177,92 @@ pub fn determine_type(url: &str) -> String {
     sites::save_type_for_url(url).to_string()
 }
 
-fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-    run_cmd_in(dir, "git", args)
-}
-
-fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
-}
-
-fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).current_dir(dir).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn builds_article_markdown_with_frontmatter() {
+        let raw = serde_json::json!([{
+            "title": "Example Article",
+            "content": "Original content"
+        }]);
+
+        let markdown = build_article_markdown(
+            &raw,
+            "Translated body",
+            "https://example.com/article",
+            "2026-06-23",
+        )
+        .unwrap();
+
+        assert!(markdown.contains("title: \"Example Article\""));
+        assert!(markdown.contains("type: web"));
+        assert!(markdown.contains("url: \"https://example.com/article\""));
+        assert!(markdown.contains("created: 2026-06-23"));
+        assert!(markdown.ends_with("Translated body"));
+    }
+
+    #[test]
+    fn writes_article_markdown_under_target_root() {
+        let target_root = unique_temp_path("article-collector-save-test");
+        std::fs::create_dir_all(&target_root).unwrap();
+
+        let raw = serde_json::json!([{
+            "title": "Example Article",
+            "content": "Original content"
+        }]);
+
+        let saved = write_article_markdown_to_target(
+            &target_root,
+            "https://example.com/article",
+            &raw,
+            "Translated body",
+            "articles/${TYPE}/",
+            "2026-06-23",
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved.repo_relative_path,
+            std::path::PathBuf::from("articles/web/2026-06-23_example-article.md")
+        );
+        assert!(saved.path.exists());
+        assert!(std::fs::read_to_string(saved.path)
+            .unwrap()
+            .contains("Translated body"));
+    }
+
+    #[test]
+    fn rejects_save_path_template_that_escapes_target_root() {
+        let sandbox = unique_temp_path("article-collector-save-escape-test");
+        let target_root = sandbox.join("target");
+        let escaped_dir = sandbox.join("web");
+        std::fs::create_dir_all(&target_root).unwrap();
+
+        let raw = serde_json::json!([{
+            "title": "Escaping Article",
+            "content": "Original content"
+        }]);
+
+        let err = write_article_markdown_to_target(
+            &target_root,
+            "https://example.com/article",
+            &raw,
+            "Translated body",
+            "../${TYPE}/",
+            "2026-06-23",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("outside target root"));
+        assert!(!escaped_dir.exists());
+    }
+
     // ── URL validation ──
 
     /// 検証: save モジュールから fetch の URL バリデーションが利用可能であること
-    /// 理由: save_and_pr は URL を受け取るため、不正 URL の早期拒否が必要
+    /// 理由: save は URL を受け取るため、不正 URL の早期拒否が必要
     /// リスク: 不正 URL がそのまま git commit メッセージや PR に含まれる
     #[test]
     fn rejects_invalid_url() {
@@ -353,5 +434,13 @@ mod tests {
         let long: String = "a".repeat(100);
         let result = title_to_slug(&long);
         assert_eq!(result.len(), 60);
+    }
+
+    fn unique_temp_path(prefix: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{suffix}", std::process::id()))
     }
 }

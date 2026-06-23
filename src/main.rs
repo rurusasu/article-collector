@@ -5,6 +5,7 @@ mod recommend;
 mod recommend_history;
 mod save;
 mod sites;
+mod target_repos;
 mod translate;
 mod youtube;
 
@@ -40,10 +41,15 @@ enum Commands {
         /// 入力 JSON ファイルパス
         input: Option<PathBuf>,
     },
-    /// 翻訳記事を保存して PR 作成
-    SaveAndPr {
+    /// 翻訳記事を target repo の作業ブランチへ保存
+    Save {
         /// 元記事の URL
         url: String,
+    },
+    /// 保存済み Markdown を commit / push して PR 作成
+    Pr {
+        /// target repo からの相対 path、または target repo 配下の絶対 path
+        path: PathBuf,
     },
     /// 推薦記事/関連リンクをまとめて取得
     Recommend {
@@ -71,7 +77,9 @@ async fn main() -> Result<()> {
             if translate::translate(&paths::raw_json_path()).await?
                 == translate::TranslateOutcome::Translated
             {
-                save::save_and_pr(url)?;
+                let prepared = target_repos::prepare_article_branch()?;
+                let saved = save::save_article_to_target(&prepared.target_dir, url)?;
+                target_repos::create_pr_for_path(&saved.path)?;
             }
         }
         Commands::Fetch { ref url } => {
@@ -81,8 +89,17 @@ async fn main() -> Result<()> {
             let input = input.clone().unwrap_or_else(paths::raw_json_path);
             translate::translate(&input).await?;
         }
-        Commands::SaveAndPr { ref url } => {
-            save::save_and_pr(url)?;
+        Commands::Save { ref url } => {
+            let prepared = target_repos::prepare_article_branch()?;
+            let saved = save::save_article_to_target(&prepared.target_dir, url)?;
+            eprintln!(
+                "Saved article on branch {}: {}",
+                prepared.branch,
+                saved.path.display()
+            );
+        }
+        Commands::Pr { ref path } => {
+            target_repos::create_pr_for_path(path)?;
         }
         Commands::Recommend {
             ref target,

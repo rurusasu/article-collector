@@ -24,3 +24,31 @@ fn root_version_flag_prints_package_version() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn root_help_lists_save_and_pr_but_not_save_and_pr() {
+    let output = Command::new(env!("CARGO_BIN_EXE_article-collector"))
+        .arg("--help")
+        .output()
+        .expect("run article-collector --help");
+
+    assert!(
+        output.status.success(),
+        "expected --help to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("help output should be valid UTF-8");
+    assert!(
+        stdout.contains("save "),
+        "help should list save command:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("pr "),
+        "help should list pr command:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("save-and-pr"),
+        "help should not list removed save-and-pr command:\n{stdout}"
+    );
+}
