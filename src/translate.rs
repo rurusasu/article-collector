@@ -16,6 +16,12 @@ pub enum TranslateOutcome {
     Skipped,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum TranslateContentOutcome {
+    Translated(String),
+    Skipped,
+}
+
 pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
     let Some(agent) = acp_agent_from_env()? else {
         eprintln!("Error: ACP_AGENT is not set. Translation skipped.");
@@ -63,6 +69,38 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
 
     eprintln!("Translation complete");
     Ok(TranslateOutcome::Translated)
+}
+
+pub async fn translate_content(content: &str) -> Result<TranslateContentOutcome> {
+    if content.trim().is_empty() {
+        bail!("No content extracted for translation");
+    }
+
+    let Some(agent) = acp_agent_from_env()? else {
+        eprintln!("Error: ACP_AGENT is not set. Translation skipped.");
+        return Ok(TranslateContentOutcome::Skipped);
+    };
+
+    let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
+    let translated = translate_text(agent, &lang, content).await?;
+    Ok(TranslateContentOutcome::Translated(translated))
+}
+
+#[cfg(test)]
+fn translate_content_outcome_for_agent(
+    agent: Option<&str>,
+    content: &str,
+) -> Result<TranslateContentOutcome> {
+    if content.trim().is_empty() {
+        bail!("No content extracted for translation");
+    }
+
+    let agent = acp_agent_from_value(agent)?;
+    if agent.is_none() {
+        return Ok(TranslateContentOutcome::Skipped);
+    }
+
+    Ok(TranslateContentOutcome::Translated(String::new()))
 }
 
 async fn translate_text(agent: AcpAgent, lang: &str, content: &str) -> Result<String> {
@@ -628,6 +666,23 @@ mod tests {
             acp_agent_from_value(Some("codex")).unwrap(),
             Some(AcpAgent::Codex)
         );
+    }
+
+    #[test]
+    fn translate_content_skips_without_agent_value() {
+        assert_eq!(
+            translate_content_outcome_for_agent(None, "hello").unwrap(),
+            TranslateContentOutcome::Skipped
+        );
+        assert_eq!(
+            translate_content_outcome_for_agent(Some("  "), "hello").unwrap(),
+            TranslateContentOutcome::Skipped
+        );
+    }
+
+    #[test]
+    fn translate_content_rejects_empty_content() {
+        assert!(translate_content_outcome_for_agent(Some("codex"), "  ").is_err());
     }
 
     /// 検証: 未対応の ACP_AGENT は明示的に拒否する

@@ -2,6 +2,7 @@ mod config;
 mod fetch;
 mod paths;
 mod recommend;
+mod recommend_artifacts;
 mod recommend_history;
 mod save;
 mod sites;
@@ -64,6 +65,9 @@ enum Commands {
         /// article-collector TOML config のパス
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
+        /// 推薦 URL の記事本文も取得して記事別 artifact を作成
+        #[arg(long)]
+        fetch_articles: bool,
     },
 }
 
@@ -106,6 +110,7 @@ async fn main() -> Result<()> {
             limit,
             ref query,
             ref config,
+            fetch_articles,
         } => {
             let app_config = config::load(config.as_deref())?;
             let collection = recommend::collect_recommended(
@@ -113,6 +118,7 @@ async fn main() -> Result<()> {
                 limit,
                 query.as_deref(),
                 &app_config.recommend,
+                fetch_articles,
             )
             .await?;
             if collection.translation_required {

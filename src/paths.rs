@@ -22,6 +22,14 @@ pub fn translated_md_path() -> PathBuf {
     outdir().join("translated.md")
 }
 
+pub fn recommended_articles_dir() -> PathBuf {
+    outdir().join("recommended_articles")
+}
+
+pub fn recommend_fetch_failures_path() -> PathBuf {
+    outdir().join("recommend-fetch-failures.json")
+}
+
 pub fn default_target_dir() -> PathBuf {
     if cfg!(windows) {
         std::env::temp_dir().join("article-collector-target-repo")
@@ -52,5 +60,18 @@ mod tests {
         let outdir = outdir();
         assert_eq!(raw_json_path(), outdir.join("raw.json"));
         assert_eq!(translated_md_path(), outdir.join("translated.md"));
+    }
+
+    #[test]
+    fn recommend_article_paths_are_under_outdir() {
+        let outdir = outdir();
+        assert_eq!(
+            recommended_articles_dir(),
+            outdir.join("recommended_articles")
+        );
+        assert_eq!(
+            recommend_fetch_failures_path(),
+            outdir.join("recommend-fetch-failures.json")
+        );
     }
 }
