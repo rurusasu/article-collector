@@ -2,6 +2,7 @@ mod config;
 mod fetch;
 mod paths;
 mod recommend;
+mod recommend_artifacts;
 mod recommend_history;
 mod save;
 mod sites;
