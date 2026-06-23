@@ -9,6 +9,14 @@ use std::process::Command;
 use crate::paths;
 use crate::sites;
 
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct SavedArticle {
+    pub path: PathBuf,
+    pub repo_relative_path: PathBuf,
+    pub title: String,
+}
+
 pub fn save_and_pr(url: &str) -> Result<()> {
     let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
     let target_dir = std::env::var("TARGET_DIR")
@@ -132,6 +140,113 @@ pub fn save_and_pr(url: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
+pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArticle> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        bail!("Invalid URL: {url}");
+    }
+
+    let outdir = paths::outdir();
+    let raw_path = outdir.join("raw.json");
+    let translated_path = paths::translated_md_path();
+    let raw = fs::read_to_string(&raw_path).context("Failed to read raw.json")?;
+    let data: Value = serde_json::from_str(&raw)?;
+    let translated = fs::read_to_string(&translated_path).unwrap_or_default();
+    let translated = append_embedded_translations(translated, &outdir);
+
+    if translated.is_empty() || translated.trim() == "null" {
+        bail!("Translation result is empty or null, aborting");
+    }
+
+    let save_path_template =
+        std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
+    let now = Local::now().format("%Y-%m-%d").to_string();
+
+    write_article_markdown_to_target(target_root, url, &data, &translated, &save_path_template, &now)
+}
+
+#[allow(dead_code)]
+pub fn write_article_markdown_to_target(
+    target_root: &Path,
+    url: &str,
+    data: &Value,
+    translated: &str,
+    save_path_template: &str,
+    now: &str,
+) -> Result<SavedArticle> {
+    let title = extract_title(data);
+    let title = sanitize_title(title);
+    let slug = title_to_slug(&title);
+    let filename = format!("{now}_{slug}.md");
+    let article_type = determine_type(url);
+    let save_path = save_path_template.replace("${TYPE}", &article_type);
+    let dest_dir = target_root.join(&save_path);
+    fs::create_dir_all(&dest_dir)?;
+    let dest_file = dest_dir.join(&filename);
+    let content = build_article_markdown(data, translated, url, now)?;
+    fs::write(&dest_file, content)?;
+
+    Ok(SavedArticle {
+        path: dest_file,
+        repo_relative_path: PathBuf::from(save_path).join(filename),
+        title,
+    })
+}
+
+#[allow(dead_code)]
+pub fn build_article_markdown(
+    data: &Value,
+    translated: &str,
+    url: &str,
+    now: &str,
+) -> Result<String> {
+    if translated.is_empty() || translated.trim() == "null" {
+        bail!("Translation result is empty or null, aborting");
+    }
+
+    let title = sanitize_title(extract_title(data));
+    let article_type = determine_type(url);
+    let frontmatter = format!(
+        "---\ntitle: \"{title}\"\ntype: {article_type}\nurl: \"{url}\"\ncreated: {now}\ntags: []\n---\n\n"
+    );
+
+    Ok(format!("{frontmatter}{translated}"))
+}
+
+#[allow(dead_code)]
+fn extract_title(data: &Value) -> &str {
+    if let Some(arr) = data.as_array() {
+        arr.first()
+            .and_then(|item| {
+                item.get("title").and_then(|t| t.as_str()).or_else(|| {
+                    item.get("text")
+                        .and_then(|t| t.as_str())
+                        .map(|s| &s[..s.len().min(80)])
+                })
+            })
+            .unwrap_or("untitled")
+    } else {
+        data.get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("untitled")
+    }
+}
+
+#[allow(dead_code)]
+fn append_embedded_translations(mut translated: String, outdir: &Path) -> String {
+    if let Ok(entries) = fs::read_dir(outdir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("embedded_") && name.ends_with("_translated.md") {
+                let emb = fs::read_to_string(entry.path()).unwrap_or_default();
+                translated.push_str("\n\n---\n\n## 関連記事\n\n");
+                translated.push_str(&emb);
+            }
+        }
+    }
+    translated
+}
+
 pub fn sanitize_title(title: &str) -> String {
     title
         .chars()
@@ -177,6 +292,65 @@ fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_article_markdown_with_frontmatter() {
+        let raw = serde_json::json!([{
+            "title": "Example Article",
+            "content": "Original content"
+        }]);
+
+        let markdown = build_article_markdown(
+            &raw,
+            "Translated body",
+            "https://example.com/article",
+            "2026-06-23",
+        )
+        .unwrap();
+
+        assert!(markdown.contains("title: \"Example Article\""));
+        assert!(markdown.contains("type: web"));
+        assert!(markdown.contains("url: \"https://example.com/article\""));
+        assert!(markdown.contains("created: 2026-06-23"));
+        assert!(markdown.ends_with("Translated body"));
+    }
+
+    #[test]
+    fn writes_article_markdown_under_target_root() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let target_root = std::env::temp_dir().join(format!(
+            "article-collector-save-test-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&target_root).unwrap();
+
+        let raw = serde_json::json!([{
+            "title": "Example Article",
+            "content": "Original content"
+        }]);
+
+        let saved = write_article_markdown_to_target(
+            &target_root,
+            "https://example.com/article",
+            &raw,
+            "Translated body",
+            "articles/${TYPE}/",
+            "2026-06-23",
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved.repo_relative_path,
+            std::path::PathBuf::from("articles/web/2026-06-23_example-article.md")
+        );
+        assert!(saved.path.exists());
+        assert!(std::fs::read_to_string(saved.path)
+            .unwrap()
+            .contains("Translated body"));
+    }
 
     // ── URL validation ──
 
