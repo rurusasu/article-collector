@@ -36,7 +36,14 @@ pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArti
         std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
     let now = Local::now().format("%Y-%m-%d").to_string();
 
-    write_article_markdown_to_target(target_root, url, &data, &translated, &save_path_template, &now)
+    write_article_markdown_to_target(
+        target_root,
+        url,
+        &data,
+        &translated,
+        &save_path_template,
+        &now,
+    )
 }
 
 pub fn write_article_markdown_to_target(

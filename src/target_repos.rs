@@ -46,10 +46,7 @@ pub fn create_pr_for_path(path: &Path) -> Result<()> {
     let branch = current_branch(&target_dir)?;
     run_git(&target_dir, &["push", "-u", "origin", &branch])?;
 
-    let pr_body = format!(
-        "## Collected Article\n\n- `{}`",
-        rel_path.to_string_lossy()
-    );
+    let pr_body = format!("## Collected Article\n\n- `{}`", rel_path.to_string_lossy());
     run_cmd_in(
         &target_dir,
         "gh",
@@ -169,7 +166,8 @@ mod tests {
     #[test]
     fn resolves_relative_path_under_target_dir() {
         let target_dir = normalized_temp_path("target-repo-relative");
-        let resolved = resolve_repo_path(&target_dir, Path::new("articles/web/example.md")).unwrap();
+        let resolved =
+            resolve_repo_path(&target_dir, Path::new("articles/web/example.md")).unwrap();
 
         assert_eq!(resolved, target_dir.join("articles/web/example.md"));
     }
@@ -199,9 +197,6 @@ mod tests {
     }
 
     fn normalized_temp_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "article-collector-{name}-{}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("article-collector-{name}-{}", std::process::id()))
     }
 }
