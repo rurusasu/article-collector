@@ -110,7 +110,7 @@ async fn main() -> Result<()> {
             limit,
             ref query,
             ref config,
-            fetch_articles: _fetch_articles,
+            fetch_articles,
         } => {
             let app_config = config::load(config.as_deref())?;
             let collection = recommend::collect_recommended(
@@ -118,6 +118,7 @@ async fn main() -> Result<()> {
                 limit,
                 query.as_deref(),
                 &app_config.recommend,
+                fetch_articles,
             )
             .await?;
             if collection.translation_required {

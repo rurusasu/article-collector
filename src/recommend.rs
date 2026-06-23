@@ -4,15 +4,17 @@ use quick_xml::reader::Reader;
 use reqwest::Url;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
 use crate::config::{RecommendConfig, RecommendSourceConfig};
 use crate::fetch;
 use crate::paths;
+use crate::recommend_artifacts;
 use crate::recommend_history::{default_history_path, RecommendationHistory};
 use crate::sites::{self, RecommendSource, Site};
+use crate::translate;
 
 #[derive(Debug, PartialEq, Eq)]
 struct LinkCandidate {
@@ -78,6 +80,7 @@ pub async fn collect_recommended(
     limit: Option<usize>,
     query: Option<&str>,
     config: &RecommendConfig,
+    fetch_articles: bool,
 ) -> Result<RecommendationCollection> {
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
@@ -108,9 +111,23 @@ pub async fn collect_recommended(
     let history_path = history_path_for_config(config)?;
     let mut history = RecommendationHistory::open(&history_path)?;
     let dedup_outcome = history.filter_new_items(items)?;
+    let skipped_seen = dedup_outcome.skipped_seen;
+    let skipped_invalid = dedup_outcome.skipped_invalid;
     items = dedup_outcome.items;
 
     ensure_new_recommendations(target, &items)?;
+
+    if fetch_articles {
+        return collect_recommended_articles(
+            target,
+            items,
+            history,
+            skipped_seen,
+            skipped_invalid,
+            config,
+        )
+        .await;
+    }
 
     let outdir = paths::outdir();
     fs::create_dir_all(&outdir)?;
@@ -122,8 +139,8 @@ pub async fn collect_recommended(
         "Recommended articles collected: {} new item(s) -> {} ({} seen skipped, {} invalid skipped, {} recorded)",
         items.len(),
         raw_path.display(),
-        dedup_outcome.skipped_seen,
-        dedup_outcome.skipped_invalid,
+        skipped_seen,
+        skipped_invalid,
         recorded_count
     );
     Ok(RecommendationCollection {
@@ -217,6 +234,185 @@ fn ensure_new_recommendations(target: &str, items: &[Value]) -> Result<()> {
         bail!("No new recommended articles found for {target}");
     }
     Ok(())
+}
+
+async fn collect_recommended_articles(
+    target: &str,
+    items: Vec<Value>,
+    mut history: RecommendationHistory,
+    skipped_seen: usize,
+    skipped_invalid: usize,
+    config: &RecommendConfig,
+) -> Result<RecommendationCollection> {
+    let outdir = paths::outdir();
+    let articles_dir = paths::recommended_articles_dir();
+    fs::create_dir_all(&articles_dir)?;
+
+    let mut used = HashMap::new();
+    let mut artifacts = Vec::new();
+    let mut failures = Vec::new();
+    let mut translated_items = Vec::new();
+    let mut fetched_items = Vec::new();
+    let translation_configured = translation_agent_configured();
+
+    for (index, item) in items.into_iter().enumerate() {
+        let url = item
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled")
+            .to_string();
+        let source = item
+            .get("source")
+            .and_then(Value::as_str)
+            .unwrap_or("recommend");
+        let stem = recommend_artifacts::article_file_stem(index + 1, source, &title, &mut used);
+
+        let fetched = match fetch::fetch_url_items(&url).await {
+            Ok(values) => values.into_iter().next().unwrap_or(Value::Null),
+            Err(error) => {
+                failures.push(recommend_artifacts::ArticleFailure {
+                    url: url.clone(),
+                    title,
+                    stage: if fetch::is_pdf_url(&url) {
+                        "unsupported_pdf".to_string()
+                    } else {
+                        "fetch".to_string()
+                    },
+                    error: error.to_string(),
+                });
+                continue;
+            }
+        };
+
+        let article_body = article_body_from_fetched(&fetched);
+        let mut article = merge_recommendation_and_article(item, fetched);
+        if let Some(object) = article.as_object_mut() {
+            object.insert("article_content".to_string(), json!(article_body));
+        }
+        let content = recommend_artifacts::format_article_content(&article);
+        if let Some(object) = article.as_object_mut() {
+            object.insert("content".to_string(), json!(content));
+        }
+
+        let json_path = recommend_artifacts::write_article_json(&articles_dir, &stem, &article)?;
+        fetched_items.push(article.clone());
+
+        let translated_path = match translate::translate_content(
+            article.get("content").and_then(Value::as_str).unwrap_or(""),
+        )
+        .await
+        {
+            Ok(translate::TranslateContentOutcome::Translated(markdown)) => {
+                let path = articles_dir.join(format!("{stem}_translated.md"));
+                fs::write(&path, markdown)?;
+                translated_items.push(article.clone());
+                Some(path)
+            }
+            Ok(translate::TranslateContentOutcome::Skipped) => None,
+            Err(error) => {
+                failures.push(recommend_artifacts::ArticleFailure {
+                    url: url.clone(),
+                    title,
+                    stage: "translate".to_string(),
+                    error: error.to_string(),
+                });
+                None
+            }
+        };
+
+        artifacts.push(recommend_artifacts::ArticleArtifact {
+            item: article,
+            json_path,
+            translated_path,
+        });
+    }
+
+    let failure_path = paths::recommend_fetch_failures_path();
+    debug_assert_eq!(
+        failure_path,
+        outdir.join("recommend-fetch-failures.json"),
+        "failure artifact path helper should stay aligned with artifact writer"
+    );
+    recommend_artifacts::write_failure_artifact(&outdir, &failures)?;
+    ensure_fetch_articles_success(target, translation_configured, translated_items.len())?;
+
+    if translation_configured {
+        recommend_artifacts::write_translated_index(
+            &outdir,
+            target,
+            &artifacts,
+            !failures.is_empty(),
+        )?;
+    }
+
+    let raw_path = paths::raw_json_path();
+    fs::write(&raw_path, serde_json::to_string_pretty(&fetched_items)?)?;
+    let seen_items = seen_items_for_fetch_articles(&translated_items, &fetched_items);
+    let recorded_count = history.record_seen_items(&seen_items)?;
+
+    eprintln!(
+        "Recommended article artifacts collected: {} fetched, {} translated -> {} ({} seen skipped, {} invalid skipped, {} recorded)",
+        fetched_items.len(),
+        translated_items.len(),
+        raw_path.display(),
+        skipped_seen,
+        skipped_invalid,
+        recorded_count
+    );
+
+    Ok(RecommendationCollection {
+        item_count: fetched_items.len(),
+        source_count: source_count_for_target(target, config)?,
+        raw_path,
+        translation_required: false,
+    })
+}
+
+fn seen_items_for_fetch_articles(
+    translated_items: &[Value],
+    _fetched_items: &[Value],
+) -> Vec<Value> {
+    translated_items.to_vec()
+}
+
+fn ensure_fetch_articles_success(
+    target: &str,
+    translation_was_attempted: bool,
+    translated_count: usize,
+) -> Result<()> {
+    if translation_was_attempted && translated_count == 0 {
+        bail!("No recommended articles translated for {target}");
+    }
+    Ok(())
+}
+
+fn merge_recommendation_and_article(mut recommendation: Value, fetched: Value) -> Value {
+    if let (Some(target), Some(source)) = (recommendation.as_object_mut(), fetched.as_object()) {
+        for (key, value) in source {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    recommendation
+}
+
+fn article_body_from_fetched(fetched: &Value) -> String {
+    fetched
+        .get("article_content")
+        .or_else(|| fetched.get("content"))
+        .or_else(|| fetched.get("text"))
+        .or_else(|| fetched.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn translation_agent_configured() -> bool {
+    std::env::var("ACP_AGENT").is_ok_and(|agent| !agent.trim().is_empty())
 }
 
 fn validate_limit(limit: usize) -> Result<()> {
@@ -1169,6 +1365,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fetch_articles_seen_items_include_only_translated_artifacts() {
+        let translated = vec![json!({
+            "url": "https://example.com/translated",
+            "title": "Translated"
+        })];
+        let fetched_not_translated = vec![json!({
+            "url": "https://example.com/fetched",
+            "title": "Fetched"
+        })];
+
+        let seen = seen_items_for_fetch_articles(&translated, &fetched_not_translated);
+
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["url"], "https://example.com/translated");
+    }
+
+    #[test]
+    fn fetch_articles_requires_translated_items_when_agent_is_configured() {
+        let error = ensure_fetch_articles_success("all", true, 0).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "No recommended articles translated for all"
+        );
+    }
+
+    #[test]
+    fn fetch_articles_allows_json_only_when_translation_is_skipped() {
+        assert!(ensure_fetch_articles_success("all", false, 0).is_ok());
+    }
+
     /// 検証: 履歴 DB での重複排除前に候補 0 件なら既存のエラーにする
     /// 理由: source が候補を返さない失敗と、既読しかない失敗を区別する
     /// リスク: 候補 0 件でも SQLite を作成し、all-seen と同じエラーに見える
@@ -1181,7 +1409,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = collect_recommended(&url, Some(5), None, &config)
+        let error = collect_recommended(&url, Some(5), None, &config, false)
             .await
             .unwrap_err();
 
