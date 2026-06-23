@@ -40,10 +40,15 @@ enum Commands {
         /// 入力 JSON ファイルパス
         input: Option<PathBuf>,
     },
-    /// 翻訳記事を保存して PR 作成
-    SaveAndPr {
+    /// 翻訳記事を target repo の作業ブランチへ保存
+    Save {
         /// 元記事の URL
         url: String,
+    },
+    /// 保存済み Markdown を commit / push して PR 作成
+    Pr {
+        /// target repo からの相対 path、または target repo 配下の絶対 path
+        path: PathBuf,
     },
     /// 推薦記事/関連リンクをまとめて取得
     Recommend {
@@ -81,8 +86,11 @@ async fn main() -> Result<()> {
             let input = input.clone().unwrap_or_else(paths::raw_json_path);
             translate::translate(&input).await?;
         }
-        Commands::SaveAndPr { ref url } => {
-            save::save_and_pr(url)?;
+        Commands::Save { .. } => {
+            anyhow::bail!("save command is not wired yet");
+        }
+        Commands::Pr { .. } => {
+            anyhow::bail!("pr command is not wired yet");
         }
         Commands::Recommend {
             ref target,
