@@ -3,7 +3,7 @@ use chrono::Local;
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::paths;
 use crate::sites;
@@ -60,9 +60,11 @@ pub fn write_article_markdown_to_target(
     let filename = format!("{now}_{slug}.md");
     let article_type = determine_type(url);
     let save_path = save_path_template.replace("${TYPE}", &article_type);
-    let dest_dir = target_root.join(&save_path);
-    fs::create_dir_all(&dest_dir)?;
-    let dest_file = dest_dir.join(&filename);
+    let dest_file = ensure_path_under_root(target_root, &Path::new(&save_path).join(&filename))?;
+    let dest_dir = dest_file
+        .parent()
+        .context("resolved article path has no parent directory")?;
+    fs::create_dir_all(dest_dir)?;
     let content = build_article_markdown(data, translated, url, now)?;
     fs::write(&dest_file, content)?;
 
@@ -71,6 +73,35 @@ pub fn write_article_markdown_to_target(
         repo_relative_path: PathBuf::from(save_path).join(filename),
         title,
     })
+}
+
+fn ensure_path_under_root(target_root: &Path, relative_path: &Path) -> Result<PathBuf> {
+    let target_root = normalize_path(target_root);
+    let dest_file = normalize_path(&target_root.join(relative_path));
+
+    if !dest_file.starts_with(&target_root) {
+        bail!(
+            "Save path {} is outside target root {}",
+            dest_file.display(),
+            target_root.display()
+        );
+    }
+
+    Ok(dest_file)
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 pub fn build_article_markdown(
@@ -174,14 +205,7 @@ mod tests {
 
     #[test]
     fn writes_article_markdown_under_target_root() {
-        let suffix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let target_root = std::env::temp_dir().join(format!(
-            "article-collector-save-test-{}-{suffix}",
-            std::process::id()
-        ));
+        let target_root = unique_temp_path("article-collector-save-test");
         std::fs::create_dir_all(&target_root).unwrap();
 
         let raw = serde_json::json!([{
@@ -207,6 +231,32 @@ mod tests {
         assert!(std::fs::read_to_string(saved.path)
             .unwrap()
             .contains("Translated body"));
+    }
+
+    #[test]
+    fn rejects_save_path_template_that_escapes_target_root() {
+        let sandbox = unique_temp_path("article-collector-save-escape-test");
+        let target_root = sandbox.join("target");
+        let escaped_dir = sandbox.join("web");
+        std::fs::create_dir_all(&target_root).unwrap();
+
+        let raw = serde_json::json!([{
+            "title": "Escaping Article",
+            "content": "Original content"
+        }]);
+
+        let err = write_article_markdown_to_target(
+            &target_root,
+            "https://example.com/article",
+            &raw,
+            "Translated body",
+            "../${TYPE}/",
+            "2026-06-23",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("outside target root"));
+        assert!(!escaped_dir.exists());
     }
 
     // ── URL validation ──
@@ -384,5 +434,13 @@ mod tests {
         let long: String = "a".repeat(100);
         let result = title_to_slug(&long);
         assert_eq!(result.len(), 60);
+    }
+
+    fn unique_temp_path(prefix: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{suffix}", std::process::id()))
     }
 }
