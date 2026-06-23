@@ -4,12 +4,10 @@ use regex::Regex;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::paths;
 use crate::sites;
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct SavedArticle {
     pub path: PathBuf,
@@ -17,130 +15,6 @@ pub struct SavedArticle {
     pub title: String,
 }
 
-pub fn save_and_pr(url: &str) -> Result<()> {
-    let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
-    let target_dir = std::env::var("TARGET_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| paths::default_target_dir());
-    let save_path_template =
-        std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
-    let auto_merge = std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string());
-
-    let now = Local::now().format("%Y-%m-%d").to_string();
-    let branch = format!("collect/{}", Local::now().format("%Y-%m-%d-%H%M%S"));
-
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        bail!("Invalid URL: {url}");
-    }
-
-    let article_type = determine_type(url);
-
-    // Extract title from raw.json
-    let outdir = paths::outdir();
-    let raw_path = outdir.join("raw.json");
-    let raw = fs::read_to_string(&raw_path).context("Failed to read raw.json")?;
-    let data: Value = serde_json::from_str(&raw)?;
-
-    let title = if let Some(arr) = data.as_array() {
-        arr.first()
-            .and_then(|item| {
-                item.get("title").and_then(|t| t.as_str()).or_else(|| {
-                    item.get("text")
-                        .and_then(|t| t.as_str())
-                        .map(|s| &s[..s.len().min(80)])
-                })
-            })
-            .unwrap_or("untitled")
-    } else {
-        data.get("title")
-            .and_then(|t| t.as_str())
-            .unwrap_or("untitled")
-    };
-
-    let title = sanitize_title(title);
-    let slug = title_to_slug(&title);
-
-    let filename = format!("{now}_{slug}.md");
-    let save_path = save_path_template.replace("${TYPE}", &article_type);
-    let dest_dir = target_dir.join(&save_path);
-
-    // Clone or update target repo
-    if target_dir.join(".git").exists() {
-        run_git(&target_dir, &["checkout", "main"])?;
-        run_git(&target_dir, &["pull", "origin", "main"])?;
-    } else {
-        let target_dir_arg = target_dir.to_string_lossy().to_string();
-        run_cmd("gh", &["repo", "clone", &target_repo, &target_dir_arg])?;
-    }
-
-    // Create branch
-    run_git(&target_dir, &["checkout", "-b", &branch])?;
-
-    // Create output file with frontmatter
-    fs::create_dir_all(&dest_dir)?;
-    let dest_file = dest_dir.join(&filename);
-
-    let frontmatter = format!(
-        "---\ntitle: \"{title}\"\ntype: {article_type}\nurl: \"{url}\"\ncreated: {now}\ntags: []\n---\n\n"
-    );
-
-    let translated_path = paths::translated_md_path();
-    let translated = fs::read_to_string(&translated_path).unwrap_or_default();
-
-    // Validate
-    if translated.is_empty() || translated.trim() == "null" {
-        bail!("Translation result is empty or null, aborting");
-    }
-
-    let mut content = format!("{frontmatter}{translated}");
-
-    // Append embedded translated articles
-    if let Ok(entries) = fs::read_dir(&outdir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("embedded_") && name.ends_with("_translated.md") {
-                let emb = fs::read_to_string(entry.path()).unwrap_or_default();
-                content.push_str("\n\n---\n\n## 関連記事\n\n");
-                content.push_str(&emb);
-            }
-        }
-    }
-
-    fs::write(&dest_file, &content)?;
-
-    // Commit + PR
-    let rel_path = format!("{save_path}{filename}");
-    run_git(&target_dir, &["add", &rel_path])?;
-    run_git(&target_dir, &["commit", "-m", &format!("collect: {title}")])?;
-    run_git(&target_dir, &["push", "-u", "origin", &branch])?;
-
-    let pr_body = format!("## Collected Article\n\n- `{rel_path}` — {title}\n\nSource: {url}");
-    run_cmd_in(
-        &target_dir,
-        "gh",
-        &[
-            "pr",
-            "create",
-            "--title",
-            &format!("collect: {now} {title}"),
-            "--body",
-            &pr_body,
-        ],
-    )?;
-
-    if auto_merge == "true" {
-        run_cmd_in(&target_dir, "gh", &["pr", "merge", "--merge"])?;
-    }
-
-    // Return to main
-    run_git(&target_dir, &["checkout", "main"])?;
-    run_git(&target_dir, &["pull", "origin", "main"])?;
-
-    eprintln!("Done: {}", dest_file.display());
-    Ok(())
-}
-
-#[allow(dead_code)]
 pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArticle> {
     if !url.starts_with("http://") && !url.starts_with("https://") {
         bail!("Invalid URL: {url}");
@@ -165,7 +39,6 @@ pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArti
     write_article_markdown_to_target(target_root, url, &data, &translated, &save_path_template, &now)
 }
 
-#[allow(dead_code)]
 pub fn write_article_markdown_to_target(
     target_root: &Path,
     url: &str,
@@ -193,7 +66,6 @@ pub fn write_article_markdown_to_target(
     })
 }
 
-#[allow(dead_code)]
 pub fn build_article_markdown(
     data: &Value,
     translated: &str,
@@ -213,7 +85,6 @@ pub fn build_article_markdown(
     Ok(format!("{frontmatter}{translated}"))
 }
 
-#[allow(dead_code)]
 fn extract_title(data: &Value) -> &str {
     if let Some(arr) = data.as_array() {
         arr.first()
@@ -232,7 +103,6 @@ fn extract_title(data: &Value) -> &str {
     }
 }
 
-#[allow(dead_code)]
 fn append_embedded_translations(mut translated: String, outdir: &Path) -> String {
     if let Ok(entries) = fs::read_dir(outdir) {
         for entry in entries.flatten() {
@@ -267,26 +137,6 @@ pub fn title_to_slug(title: &str) -> String {
 
 pub fn determine_type(url: &str) -> String {
     sites::save_type_for_url(url).to_string()
-}
-
-fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-    run_cmd_in(dir, "git", args)
-}
-
-fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
-}
-
-fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).current_dir(dir).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -355,7 +205,7 @@ mod tests {
     // ── URL validation ──
 
     /// 検証: save モジュールから fetch の URL バリデーションが利用可能であること
-    /// 理由: save_and_pr は URL を受け取るため、不正 URL の早期拒否が必要
+    /// 理由: save は URL を受け取るため、不正 URL の早期拒否が必要
     /// リスク: 不正 URL がそのまま git commit メッセージや PR に含まれる
     #[test]
     fn rejects_invalid_url() {

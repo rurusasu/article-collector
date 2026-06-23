@@ -77,7 +77,9 @@ async fn main() -> Result<()> {
             if translate::translate(&paths::raw_json_path()).await?
                 == translate::TranslateOutcome::Translated
             {
-                save::save_and_pr(url)?;
+                let prepared = target_repos::prepare_article_branch()?;
+                let saved = save::save_article_to_target(&prepared.target_dir, url)?;
+                target_repos::create_pr_for_path(&saved.path)?;
             }
         }
         Commands::Fetch { ref url } => {
@@ -87,11 +89,17 @@ async fn main() -> Result<()> {
             let input = input.clone().unwrap_or_else(paths::raw_json_path);
             translate::translate(&input).await?;
         }
-        Commands::Save { .. } => {
-            anyhow::bail!("save command is not wired yet");
+        Commands::Save { ref url } => {
+            let prepared = target_repos::prepare_article_branch()?;
+            let saved = save::save_article_to_target(&prepared.target_dir, url)?;
+            eprintln!(
+                "Saved article on branch {}: {}",
+                prepared.branch,
+                saved.path.display()
+            );
         }
-        Commands::Pr { .. } => {
-            anyhow::bail!("pr command is not wired yet");
+        Commands::Pr { ref path } => {
+            target_repos::create_pr_for_path(path)?;
         }
         Commands::Recommend {
             ref target,
