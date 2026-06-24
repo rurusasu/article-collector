@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use chrono::Local;
 use regex::Regex;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -57,6 +58,28 @@ pub fn write_article_markdown_to_target(
     let title = extract_title(data);
     let title = sanitize_title(title);
     let slug = title_to_slug(&title);
+    write_article_markdown_to_target_with_slug(
+        target_root,
+        url,
+        data,
+        translated,
+        save_path_template,
+        now,
+        &slug,
+    )
+}
+
+fn write_article_markdown_to_target_with_slug(
+    target_root: &Path,
+    url: &str,
+    data: &Value,
+    translated: &str,
+    save_path_template: &str,
+    now: &str,
+    slug: &str,
+) -> Result<SavedArticle> {
+    let title = extract_title(data);
+    let title = sanitize_title(title);
     let filename = format!("{now}_{slug}.md");
     let article_type = determine_type(url);
     let save_path = save_path_template.replace("${TYPE}", &article_type);
@@ -73,6 +96,83 @@ pub fn write_article_markdown_to_target(
         repo_relative_path: PathBuf::from(save_path).join(filename),
         title,
     })
+}
+
+pub fn save_recommended_articles_to_target(
+    target_root: &Path,
+    articles: &[crate::recommend::TranslatedRecommendedArticle],
+) -> Result<Vec<SavedArticle>> {
+    let save_path_template =
+        std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
+    let now = Local::now().format("%Y-%m-%d").to_string();
+
+    write_recommended_articles_to_target(target_root, articles, &save_path_template, &now)
+}
+
+pub fn write_recommended_articles_to_target(
+    target_root: &Path,
+    articles: &[crate::recommend::TranslatedRecommendedArticle],
+    save_path_template: &str,
+    now: &str,
+) -> Result<Vec<SavedArticle>> {
+    if articles.is_empty() {
+        bail!("No translated recommended articles to save");
+    }
+
+    let mut used_paths = HashSet::new();
+    articles
+        .iter()
+        .map(|article| {
+            let url = article
+                .item
+                .get("url")
+                .and_then(Value::as_str)
+                .context("Recommended article is missing url")?;
+            let translated = fs::read_to_string(&article.translated_path).with_context(|| {
+                format!(
+                    "Failed to read translated article {}",
+                    article.translated_path.display()
+                )
+            })?;
+            let title = sanitize_title(extract_title(&article.item));
+            let base_slug = title_to_slug(&title);
+            let article_type = determine_type(url);
+            let save_path = save_path_template.replace("${TYPE}", &article_type);
+            let slug =
+                unique_recommended_article_slug(&save_path, now, &base_slug, &mut used_paths);
+
+            write_article_markdown_to_target_with_slug(
+                target_root,
+                url,
+                &article.item,
+                &translated,
+                save_path_template,
+                now,
+                &slug,
+            )
+        })
+        .collect()
+}
+
+fn unique_recommended_article_slug(
+    save_path: &str,
+    now: &str,
+    base_slug: &str,
+    used_paths: &mut HashSet<PathBuf>,
+) -> String {
+    let mut suffix = 1;
+    loop {
+        let slug = if suffix == 1 {
+            base_slug.to_string()
+        } else {
+            format!("{base_slug}-{suffix}")
+        };
+        let relative_path = PathBuf::from(save_path).join(format!("{now}_{slug}.md"));
+        if used_paths.insert(relative_path) {
+            return slug;
+        }
+        suffix += 1;
+    }
 }
 
 fn ensure_path_under_root(target_root: &Path, relative_path: &Path) -> Result<PathBuf> {
@@ -231,6 +331,109 @@ mod tests {
         assert!(std::fs::read_to_string(saved.path)
             .unwrap()
             .contains("Translated body"));
+    }
+
+    #[test]
+    fn writes_all_translated_recommended_articles_under_target_root() {
+        let target_root = unique_temp_path("article-collector-save-recommended-test");
+        let source_root = unique_temp_path("article-collector-save-recommended-source");
+        std::fs::create_dir_all(&target_root).unwrap();
+        std::fs::create_dir_all(&source_root).unwrap();
+        let first_translation = source_root.join("first_translated.md");
+        let second_translation = source_root.join("second_translated.md");
+        std::fs::write(&first_translation, "First translated body").unwrap();
+        std::fs::write(&second_translation, "Second translated body").unwrap();
+        let articles = vec![
+            crate::recommend::TranslatedRecommendedArticle {
+                item: serde_json::json!({
+                    "title": "First Recommended Article",
+                    "url": "https://example.com/first"
+                }),
+                translated_path: first_translation,
+            },
+            crate::recommend::TranslatedRecommendedArticle {
+                item: serde_json::json!({
+                    "title": "Second Recommended Article",
+                    "url": "https://arxiv.org/abs/2606.00001"
+                }),
+                translated_path: second_translation,
+            },
+        ];
+
+        let saved = write_recommended_articles_to_target(
+            &target_root,
+            &articles,
+            "articles/${TYPE}/",
+            "2026-06-24",
+        )
+        .unwrap();
+
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            saved[0].repo_relative_path,
+            PathBuf::from("articles/web/2026-06-24_first-recommended-article.md")
+        );
+        assert_eq!(
+            saved[1].repo_relative_path,
+            PathBuf::from("articles/paper/2026-06-24_second-recommended-article.md")
+        );
+        assert!(std::fs::read_to_string(&saved[0].path)
+            .unwrap()
+            .contains("First translated body"));
+        assert!(std::fs::read_to_string(&saved[1].path)
+            .unwrap()
+            .contains("Second translated body"));
+    }
+
+    #[test]
+    fn writes_duplicate_recommended_article_titles_to_unique_paths() {
+        let target_root = unique_temp_path("article-collector-save-recommended-duplicates-test");
+        let source_root = unique_temp_path("article-collector-save-recommended-duplicates-source");
+        std::fs::create_dir_all(&target_root).unwrap();
+        std::fs::create_dir_all(&source_root).unwrap();
+        let first_translation = source_root.join("first_translated.md");
+        let second_translation = source_root.join("second_translated.md");
+        std::fs::write(&first_translation, "First duplicate body").unwrap();
+        std::fs::write(&second_translation, "Second duplicate body").unwrap();
+        let articles = vec![
+            crate::recommend::TranslatedRecommendedArticle {
+                item: serde_json::json!({
+                    "title": "Same Title",
+                    "url": "https://example.com/first"
+                }),
+                translated_path: first_translation,
+            },
+            crate::recommend::TranslatedRecommendedArticle {
+                item: serde_json::json!({
+                    "title": "Same Title",
+                    "url": "https://example.com/second"
+                }),
+                translated_path: second_translation,
+            },
+        ];
+
+        let saved = write_recommended_articles_to_target(
+            &target_root,
+            &articles,
+            "articles/${TYPE}/",
+            "2026-06-24",
+        )
+        .unwrap();
+
+        assert_eq!(
+            saved[0].repo_relative_path,
+            PathBuf::from("articles/web/2026-06-24_same-title.md")
+        );
+        assert_eq!(
+            saved[1].repo_relative_path,
+            PathBuf::from("articles/web/2026-06-24_same-title-2.md")
+        );
+        assert!(std::fs::read_to_string(&saved[0].path)
+            .unwrap()
+            .contains("First duplicate body"));
+        assert!(std::fs::read_to_string(&saved[1].path)
+            .unwrap()
+            .contains("Second duplicate body"));
     }
 
     #[test]
