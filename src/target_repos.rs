@@ -33,37 +33,27 @@ pub fn prepare_article_branch() -> Result<PreparedTargetRepo> {
 
 pub fn create_pr_for_path(path: &Path) -> Result<()> {
     let target_dir = target_dir_from_env();
-    let resolved = resolve_repo_path(&target_dir, path)?;
-    let rel_path = repo_relative_path(&target_dir, &resolved)?;
-    ensure_non_main_branch(&target_dir)?;
-
-    let rel_path_arg = rel_path.to_string_lossy().to_string();
-    run_git(&target_dir, &["add", &rel_path_arg])?;
-    run_git(
-        &target_dir,
-        &["commit", "-m", &format!("collect: {}", rel_path.display())],
-    )?;
-    let branch = current_branch(&target_dir)?;
-    run_git(&target_dir, &["push", "-u", "origin", &branch])?;
+    let rel_paths = repo_relative_paths_for_inputs(&target_dir, &[path.to_path_buf()])?;
+    let rel_path = rel_paths
+        .first()
+        .context("No paths supplied for PR creation")?;
+    let title = format!("collect: {}", rel_path.display());
 
     let pr_body = format!("## Collected Article\n\n- `{}`", rel_path.to_string_lossy());
-    run_cmd_in(
-        &target_dir,
-        "gh",
-        &[
-            "pr",
-            "create",
-            "--title",
-            &format!("collect: {}", rel_path.display()),
-            "--body",
-            &pr_body,
-        ],
-    )?;
+    commit_push_and_create_pr(&target_dir, &rel_paths, &title, &title, &pr_body)?;
+    Ok(())
+}
 
-    if std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string()) == "true" {
-        run_cmd_in(&target_dir, "gh", &["pr", "merge", "--merge"])?;
-    }
+pub fn create_pr_for_paths(
+    paths: &[PathBuf],
+    commit_message: &str,
+    pr_title: &str,
+    pr_body: &str,
+) -> Result<()> {
+    let target_dir = target_dir_from_env();
+    let rel_paths = repo_relative_paths_for_inputs(&target_dir, paths)?;
 
+    commit_push_and_create_pr(&target_dir, &rel_paths, commit_message, pr_title, pr_body)?;
     Ok(())
 }
 
@@ -98,6 +88,20 @@ pub fn repo_relative_path(target_dir: &Path, path: &Path) -> Result<PathBuf> {
                 target_dir.display()
             )
         })
+}
+
+fn repo_relative_paths_for_inputs(target_dir: &Path, inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    if inputs.is_empty() {
+        bail!("No paths supplied for PR creation");
+    }
+
+    inputs
+        .iter()
+        .map(|input| {
+            let resolved = resolve_repo_path(target_dir, input)?;
+            repo_relative_path(target_dir, &resolved)
+        })
+        .collect()
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -143,6 +147,10 @@ fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
     run_cmd_in(dir, "git", args)
 }
 
+fn run_git_owned(dir: &Path, args: &[String]) -> Result<()> {
+    run_cmd_in_owned(dir, "git", args)
+}
+
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
     let status = Command::new(cmd).args(args).status()?;
     if !status.success() {
@@ -156,6 +164,47 @@ fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
     if !status.success() {
         bail!("{cmd} {} failed with {status}", args.join(" "));
     }
+    Ok(())
+}
+
+fn run_cmd_in_owned(dir: &Path, cmd: &str, args: &[String]) -> Result<()> {
+    let status = Command::new(cmd).current_dir(dir).args(args).status()?;
+    if !status.success() {
+        bail!("{cmd} {} failed with {status}", args.join(" "));
+    }
+    Ok(())
+}
+
+fn commit_push_and_create_pr(
+    target_dir: &Path,
+    rel_paths: &[PathBuf],
+    commit_message: &str,
+    pr_title: &str,
+    pr_body: &str,
+) -> Result<()> {
+    ensure_non_main_branch(target_dir)?;
+
+    let mut add_args = vec!["add".to_string()];
+    add_args.extend(
+        rel_paths
+            .iter()
+            .map(|path| path.to_string_lossy().to_string()),
+    );
+    run_git_owned(target_dir, &add_args)?;
+    run_git(target_dir, &["commit", "-m", commit_message])?;
+    let branch = current_branch(target_dir)?;
+    run_git(target_dir, &["push", "-u", "origin", &branch])?;
+
+    run_cmd_in(
+        target_dir,
+        "gh",
+        &["pr", "create", "--title", pr_title, "--body", pr_body],
+    )?;
+
+    if std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string()) == "true" {
+        run_cmd_in(target_dir, "gh", &["pr", "merge", "--merge"])?;
+    }
+
     Ok(())
 }
 
@@ -194,6 +243,35 @@ mod tests {
         let target_dir = normalized_temp_path("target-repo-parent-escape");
 
         assert!(resolve_repo_path(&target_dir, Path::new("../outside.md")).is_err());
+    }
+
+    #[test]
+    fn resolves_multiple_pr_paths_to_repo_relative_paths() {
+        let target_dir = normalized_temp_path("target-repo-multi-path");
+        let absolute = target_dir.join("articles/paper/example.md");
+
+        let relative_paths = repo_relative_paths_for_inputs(
+            &target_dir,
+            &[PathBuf::from("articles/web/example.md"), absolute.clone()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            relative_paths,
+            vec![
+                PathBuf::from("articles/web/example.md"),
+                PathBuf::from("articles/paper/example.md"),
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_pr_path_list() {
+        let target_dir = normalized_temp_path("target-repo-empty-paths");
+
+        let error = repo_relative_paths_for_inputs(&target_dir, &[]).unwrap_err();
+
+        assert_eq!(error.to_string(), "No paths supplied for PR creation");
     }
 
     fn normalized_temp_path(name: &str) -> PathBuf {

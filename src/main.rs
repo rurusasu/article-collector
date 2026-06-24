@@ -119,8 +119,105 @@ async fn main() -> Result<()> {
             if collection.translation_required {
                 translate::translate(&collection.raw_path).await?;
             }
+            if app_config.recommend.create_pr {
+                ensure_recommend_pr_has_articles(&collection)?;
+                let prepared = target_repos::prepare_article_branch()?;
+                let saved_articles = save::save_recommended_articles_to_target(
+                    &prepared.target_dir,
+                    &collection.translated_articles,
+                )?;
+                let saved_paths = saved_articles
+                    .iter()
+                    .map(|article| article.path.clone())
+                    .collect::<Vec<_>>();
+                let pr_title = recommend_pr_title(target, saved_articles.len());
+                let pr_body = recommend_pr_body(&saved_articles);
+                target_repos::create_pr_for_paths(&saved_paths, &pr_title, &pr_title, &pr_body)?;
+            }
         }
     }
 
     Ok(())
+}
+
+fn recommend_pr_title(target: &str, count: usize) -> String {
+    let noun = if count == 1 { "article" } else { "articles" };
+    format!("recommend: collect {count} {noun} from {target}")
+}
+
+fn recommend_pr_body(saved_articles: &[save::SavedArticle]) -> String {
+    let mut lines = vec!["## Recommended Articles".to_string(), String::new()];
+    for article in saved_articles {
+        lines.push(format!(
+            "- `{}`",
+            article.repo_relative_path.to_string_lossy()
+        ));
+    }
+    lines.join("\n")
+}
+
+fn ensure_recommend_pr_has_articles(
+    collection: &recommend::RecommendationCollection,
+) -> Result<()> {
+    if collection.translated_articles.is_empty() {
+        anyhow::bail!("No translated recommended articles available for PR creation");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recommend_pr_body_lists_all_saved_article_paths() {
+        let saved_articles = vec![
+            save::SavedArticle {
+                path: PathBuf::from("D:/target/articles/web/first.md"),
+                repo_relative_path: PathBuf::from("articles/web/first.md"),
+                title: "First".to_string(),
+            },
+            save::SavedArticle {
+                path: PathBuf::from("D:/target/articles/paper/second.md"),
+                repo_relative_path: PathBuf::from("articles/paper/second.md"),
+                title: "Second".to_string(),
+            },
+        ];
+
+        let body = recommend_pr_body(&saved_articles);
+
+        assert!(body.contains("## Recommended Articles"));
+        assert!(body.contains("- `articles/web/first.md`"));
+        assert!(body.contains("- `articles/paper/second.md`"));
+    }
+
+    #[test]
+    fn recommend_pr_title_uses_singular_and_plural_nouns() {
+        assert_eq!(
+            recommend_pr_title("hackernews", 1),
+            "recommend: collect 1 article from hackernews"
+        );
+        assert_eq!(
+            recommend_pr_title("all", 2),
+            "recommend: collect 2 articles from all"
+        );
+    }
+
+    #[test]
+    fn recommend_pr_requires_translated_articles_before_target_repo_side_effects() {
+        let collection = recommend::RecommendationCollection {
+            item_count: 0,
+            source_count: 1,
+            raw_path: PathBuf::from("raw.json"),
+            translation_required: false,
+            translated_articles: Vec::new(),
+        };
+
+        let error = ensure_recommend_pr_has_articles(&collection).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "No translated recommended articles available for PR creation"
+        );
+    }
 }

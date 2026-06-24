@@ -2,6 +2,7 @@
 sources = ["hackernews", "devto", "zenn", "arxiv"]
 limit = 30
 fetch_articles = false
+create_pr = false
 # history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 [recommend.source.arxiv]

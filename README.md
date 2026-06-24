@@ -152,6 +152,22 @@ recommend-fetch-failures.json
 
 PDF URL は現時点では本文取得対象外で、`recommend-fetch-failures.json` に `stage: "unsupported_pdf"` として記録される。PDF 本文抽出は coming soon。
 
+取得・翻訳できた推薦記事を target repo に保存し、1つの PR にまとめて作成する場合:
+
+```toml
+[recommend]
+fetch_articles = true
+create_pr = true
+```
+
+```bash
+export ACP_AGENT="codex"
+export TARGET_REPO="your-org/your-repo"
+article-collector recommend all --config article-collector.toml
+```
+
+`[recommend].create_pr = true` は `[recommend].fetch_articles = true` が必須。翻訳済み記事が 0 件の場合、target repo の clone / branch 作成前に非ゼロ終了する。PR には `recommended_articles/*_translated.md` ではなく、target repo の `SAVE_PATH_TEMPLATE` に従って保存した Markdown 記事ファイルをすべて含める。
+
 全工程を実行する場合:
 
 Codex を ACP 経由で使う場合:
@@ -190,7 +206,7 @@ export ACP_AGENT="gemini"
 | `article-collector recommend <SITE_OR_URL> --limit 30` | site 名または起点 URL からレコメンド/関連リンクを収集 | `raw.json` に推薦一覧を作成 |
 | `article-collector recommend arxiv --query "<QUERY>" --limit 10` | arXiv API query から新着論文を収集 | `raw.json` に論文推薦一覧を作成 |
 | `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集し、翻訳まで実行 | `raw.json` に推薦一覧を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
-| `article-collector recommend all --config article-collector.toml` | source 別 config を使って全 site から推薦記事を収集 | `raw.json` に推薦一覧を作成。arXiv query / source 別 limit / 記事本文取得を config で上書き |
+| `article-collector recommend all --config article-collector.toml` | source 別 config を使って全 site から推薦記事を収集 | `raw.json` に推薦一覧を作成。arXiv query / source 別 limit / 記事本文取得 / PR 作成を config で上書き |
 
 ## 設定
 
@@ -216,6 +232,7 @@ export ACP_AGENT="gemini"
 sources = ["hackernews", "devto", "zenn", "arxiv"]
 limit = 30
 fetch_articles = false
+create_pr = false
 # history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 [recommend.source.arxiv]
@@ -223,7 +240,7 @@ limit = 10
 query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
 ```
 
-優先順位は CLI 明示指定、source 別 config、recommend 全体 config、コード内 default の順。`recommend all --query ...` は引き続き拒否する。`query` は `recommend arxiv` または `[recommend.source.arxiv]` で指定する。記事本文取得は CLI flag ではなく `[recommend].fetch_articles` で指定する。
+優先順位は CLI 明示指定、source 別 config、recommend 全体 config、コード内 default の順。`recommend all --query ...` は引き続き拒否する。`query` は `recommend arxiv` または `[recommend.source.arxiv]` で指定する。記事本文取得と PR 作成は CLI flag ではなく `[recommend].fetch_articles` / `[recommend].create_pr` で指定する。
 
 ### ACP agent 利用時の注意
 
@@ -282,6 +299,8 @@ taplo lint Cargo.toml article-collector.toml release-plz.toml
 cargo test --locked
 cargo build --release --locked
 ```
+
+外部サービスへ実アクセスする live test は通常の `cargo test --locked` では skip される。recommend source の実疎通を確認する場合は `cargo test --locked recommend::tests::collects_recommendations_from_every_registered_site -- --ignored --nocapture` を使う。
 
 Taskfile は Rust CLI の薄いラッパーとして使える:
 

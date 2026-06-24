@@ -68,11 +68,18 @@ struct SourcePlan {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct TranslatedRecommendedArticle {
+    pub item: Value,
+    pub translated_path: PathBuf,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct RecommendationCollection {
     pub item_count: usize,
     pub source_count: usize,
     pub raw_path: PathBuf,
     pub translation_required: bool,
+    pub translated_articles: Vec<TranslatedRecommendedArticle>,
 }
 
 pub async fn collect_recommended(
@@ -81,6 +88,7 @@ pub async fn collect_recommended(
     query: Option<&str>,
     config: &RecommendConfig,
 ) -> Result<RecommendationCollection> {
+    validate_create_pr_config(config)?;
     let recommendation_target = resolve_recommendation_target(target)?;
     let translation_required = recommendation_target.translation_required();
     let mut items = match recommendation_target {
@@ -147,6 +155,7 @@ pub async fn collect_recommended(
         source_count: source_count_for_target(target, config)?,
         raw_path,
         translation_required,
+        translated_articles: Vec::new(),
     })
 }
 
@@ -369,6 +378,7 @@ async fn collect_recommended_articles(
         source_count: source_count_for_target(target, config)?,
         raw_path,
         translation_required: false,
+        translated_articles: translated_recommended_articles_from_artifacts(&artifacts),
     })
 }
 
@@ -379,6 +389,23 @@ fn seen_items_for_fetch_articles(
     translated_items.to_vec()
 }
 
+fn translated_recommended_articles_from_artifacts(
+    artifacts: &[recommend_artifacts::ArticleArtifact],
+) -> Vec<TranslatedRecommendedArticle> {
+    artifacts
+        .iter()
+        .filter_map(|artifact| {
+            artifact
+                .translated_path
+                .as_ref()
+                .map(|translated_path| TranslatedRecommendedArticle {
+                    item: artifact.item.clone(),
+                    translated_path: translated_path.clone(),
+                })
+        })
+        .collect()
+}
+
 fn ensure_fetch_articles_success(
     target: &str,
     translation_was_attempted: bool,
@@ -386,6 +413,13 @@ fn ensure_fetch_articles_success(
 ) -> Result<()> {
     if translation_was_attempted && translated_count == 0 {
         bail!("No recommended articles translated for {target}");
+    }
+    Ok(())
+}
+
+fn validate_create_pr_config(config: &RecommendConfig) -> Result<()> {
+    if config.create_pr && !config.fetch_articles {
+        bail!("[recommend].create_pr requires [recommend].fetch_articles = true");
     }
     Ok(())
 }
@@ -1382,6 +1416,39 @@ mod tests {
     }
 
     #[test]
+    fn translated_recommended_articles_include_only_translated_artifacts() {
+        let artifacts = vec![
+            recommend_artifacts::ArticleArtifact {
+                item: json!({
+                    "url": "https://example.com/translated",
+                    "title": "Translated"
+                }),
+                json_path: PathBuf::from("recommended_articles/translated.json"),
+                translated_path: Some(PathBuf::from(
+                    "recommended_articles/translated_translated.md",
+                )),
+            },
+            recommend_artifacts::ArticleArtifact {
+                item: json!({
+                    "url": "https://example.com/json-only",
+                    "title": "JSON only"
+                }),
+                json_path: PathBuf::from("recommended_articles/json-only.json"),
+                translated_path: None,
+            },
+        ];
+
+        let translated = translated_recommended_articles_from_artifacts(&artifacts);
+
+        assert_eq!(translated.len(), 1);
+        assert_eq!(translated[0].item["url"], "https://example.com/translated");
+        assert_eq!(
+            translated[0].translated_path,
+            PathBuf::from("recommended_articles/translated_translated.md")
+        );
+    }
+
+    #[test]
     fn fetch_articles_requires_translated_items_when_agent_is_configured() {
         let error = ensure_fetch_articles_success("all", true, 0).unwrap_err();
 
@@ -1394,6 +1461,21 @@ mod tests {
     #[test]
     fn fetch_articles_allows_json_only_when_translation_is_skipped() {
         assert!(ensure_fetch_articles_success("all", false, 0).is_ok());
+    }
+
+    #[test]
+    fn create_pr_requires_fetch_articles() {
+        let config = RecommendConfig {
+            create_pr: true,
+            ..Default::default()
+        };
+
+        let error = validate_create_pr_config(&config).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "[recommend].create_pr requires [recommend].fetch_articles = true"
+        );
     }
 
     /// 検証: 履歴 DB での重複排除前に候補 0 件なら既存のエラーにする
@@ -1775,6 +1857,7 @@ mod tests {
     /// 理由: `recommend all` は全 site の外部 API / ページ構造に依存するため、単体変換だけでは壊れた取得経路を検出できない
     /// リスク: ある site の source が壊れても all 実行まで気づけない
     #[tokio::test]
+    #[ignore = "requires live network access and can be rate limited by remote services"]
     async fn collects_recommendations_from_every_registered_site() {
         let config = RecommendConfig::default();
         let items = collect_all_sources(Some(1), &config).await.unwrap();

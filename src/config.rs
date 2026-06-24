@@ -18,6 +18,7 @@ pub struct RecommendConfig {
     pub limit: Option<usize>,
     pub sources: Option<Vec<String>>,
     pub fetch_articles: bool,
+    pub create_pr: bool,
     pub history_path: Option<PathBuf>,
     pub source: BTreeMap<String, RecommendSourceConfig>,
 }
@@ -122,6 +123,22 @@ mod tests {
         .unwrap();
 
         assert!(config.recommend.fetch_articles);
+    }
+
+    /// 検証: recommend の PR 作成を TOML から opt-in できる
+    /// 理由: cron 実行では CLI flag ではなく config file 側で PR 作成まで自動化したい
+    /// リスク: 設定に書いても recommend が target repo への保存/PR 作成へ進まない
+    #[test]
+    fn parses_recommend_create_pr_switch() {
+        let config = parse_config(
+            r#"
+        [recommend]
+        create_pr = true
+        "#,
+        )
+        .unwrap();
+
+        assert!(config.recommend.create_pr);
     }
 
     /// 検証: 未知 key は config parse error にする
