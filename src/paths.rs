@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
-pub const OUTDIR_ENV: &str = "ARTICLE_COLLECTOR_OUTDIR";
+pub const TEMP_DIR_ENV: &str = "ARTICLE_COLLECTOR_TEMP_DIR";
+pub const OUTPUT_DIR_ENV: &str = "ARTICLE_COLLECTOR_OUTPUT_DIR";
 
-pub fn outdir() -> PathBuf {
-    if let Some(path) = env_path(OUTDIR_ENV) {
+pub fn temp_dir() -> PathBuf {
+    if let Some(path) = env_path(TEMP_DIR_ENV) {
         return path;
     }
 
@@ -15,19 +16,23 @@ pub fn outdir() -> PathBuf {
 }
 
 pub fn raw_json_path() -> PathBuf {
-    outdir().join("raw.json")
+    temp_dir().join("raw.json")
 }
 
 pub fn translated_md_path() -> PathBuf {
-    outdir().join("translated.md")
+    temp_dir().join("translated.md")
 }
 
 pub fn recommended_articles_dir() -> PathBuf {
-    outdir().join("recommended_articles")
+    temp_dir().join("recommended_articles")
+}
+
+pub fn output_dir() -> Option<PathBuf> {
+    env_path(OUTPUT_DIR_ENV)
 }
 
 pub fn recommend_fetch_failures_path() -> PathBuf {
-    outdir().join("recommend-fetch-failures.json")
+    temp_dir().join("recommend-fetch-failures.json")
 }
 
 pub fn default_target_dir() -> PathBuf {
@@ -56,22 +61,32 @@ mod tests {
     /// 理由: raw.json と translated.md は同一の作業ディレクトリを共有する必要がある
     /// リスク: コマンド間で異なる場所を参照し、collect パイプラインが途中で失敗する
     #[test]
-    fn output_files_are_under_outdir() {
-        let outdir = outdir();
-        assert_eq!(raw_json_path(), outdir.join("raw.json"));
-        assert_eq!(translated_md_path(), outdir.join("translated.md"));
+    fn run_artifact_files_are_under_temp_dir() {
+        let temp_dir = temp_dir();
+        assert_eq!(raw_json_path(), temp_dir.join("raw.json"));
+        assert_eq!(translated_md_path(), temp_dir.join("translated.md"));
     }
 
     #[test]
-    fn recommend_article_paths_are_under_outdir() {
-        let outdir = outdir();
+    fn recommend_article_artifact_paths_are_under_temp_dir() {
+        let temp_dir = temp_dir();
         assert_eq!(
             recommended_articles_dir(),
-            outdir.join("recommended_articles")
+            temp_dir.join("recommended_articles")
         );
         assert_eq!(
             recommend_fetch_failures_path(),
-            outdir.join("recommend-fetch-failures.json")
+            temp_dir.join("recommend-fetch-failures.json")
         );
+    }
+
+    #[test]
+    fn temp_dir_env_name_describes_temporary_artifacts() {
+        assert_eq!(TEMP_DIR_ENV, "ARTICLE_COLLECTOR_TEMP_DIR");
+    }
+
+    #[test]
+    fn output_dir_env_name_describes_final_outputs() {
+        assert_eq!(OUTPUT_DIR_ENV, "ARTICLE_COLLECTOR_OUTPUT_DIR");
     }
 }

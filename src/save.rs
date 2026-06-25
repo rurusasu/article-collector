@@ -21,7 +21,7 @@ pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArti
         bail!("Invalid URL: {url}");
     }
 
-    let outdir = paths::outdir();
+    let outdir = paths::temp_dir();
     let raw_path = outdir.join("raw.json");
     let translated_path = paths::translated_md_path();
     let raw = fs::read_to_string(&raw_path).context("Failed to read raw.json")?;
@@ -37,14 +37,17 @@ pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArti
         std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
     let now = Local::now().format("%Y-%m-%d").to_string();
 
-    write_article_markdown_to_target(
+    let saved = write_article_markdown_to_target(
         target_root,
         url,
         &data,
         &translated,
         &save_path_template,
         &now,
-    )
+    )?;
+    collect_final_markdown_if_configured(target_root)?;
+
+    Ok(saved)
 }
 
 pub fn write_article_markdown_to_target(
@@ -106,7 +109,11 @@ pub fn save_recommended_articles_to_target(
         std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
     let now = Local::now().format("%Y-%m-%d").to_string();
 
-    write_recommended_articles_to_target(target_root, articles, &save_path_template, &now)
+    let saved =
+        write_recommended_articles_to_target(target_root, articles, &save_path_template, &now)?;
+    collect_final_markdown_if_configured(target_root)?;
+
+    Ok(saved)
 }
 
 pub fn write_recommended_articles_to_target(
@@ -255,6 +262,138 @@ fn append_embedded_translations(mut translated: String, outdir: &Path) -> String
     translated
 }
 
+fn collect_final_markdown_if_configured(source_root: &Path) -> Result<Vec<PathBuf>> {
+    let Some(destination_root) = paths::output_dir() else {
+        return Ok(Vec::new());
+    };
+
+    let copied = copy_final_markdown_files(source_root, &destination_root)?;
+    if !copied.is_empty() {
+        eprintln!(
+            "Final Markdown files copied: {} file(s) -> {}",
+            copied.len(),
+            destination_root.display()
+        );
+    }
+    Ok(copied)
+}
+
+fn copy_final_markdown_files(source_root: &Path, destination_root: &Path) -> Result<Vec<PathBuf>> {
+    let source_root = normalize_path(source_root);
+    let destination_root = normalize_path(destination_root);
+    let mut copied = Vec::new();
+
+    discover_news_dirs(&source_root, &source_root, &destination_root, &mut copied)?;
+    copied.sort();
+
+    Ok(copied)
+}
+
+fn discover_news_dirs(
+    current: &Path,
+    source_root: &Path,
+    destination_root: &Path,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if normalize_path(current).starts_with(destination_root) {
+        return Ok(());
+    }
+
+    for entry in sorted_entries(current)? {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", path.display()))?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        if is_news_dir(&path) {
+            copy_markdown_tree(&path, source_root, destination_root, copied)?;
+        } else {
+            discover_news_dirs(&path, source_root, destination_root, copied)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_markdown_tree(
+    current: &Path,
+    source_root: &Path,
+    destination_root: &Path,
+    copied: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in sorted_entries(current)? {
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("Failed to inspect {}", path.display()))?;
+
+        if file_type.is_dir() {
+            copy_markdown_tree(&path, source_root, destination_root, copied)?;
+            continue;
+        }
+
+        if !file_type.is_file() || !is_markdown_file(&path) {
+            continue;
+        }
+
+        let relative_path = path.strip_prefix(source_root).with_context(|| {
+            format!(
+                "News Markdown path {} is outside source root {}",
+                path.display(),
+                source_root.display()
+            )
+        })?;
+        let destination_path = destination_root.join(relative_path);
+
+        if normalize_path(&path) == normalize_path(&destination_path) {
+            continue;
+        }
+
+        if let Some(parent) = destination_path.parent() {
+            fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "Failed to create news Markdown directory {}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::copy(&path, &destination_path).with_context(|| {
+            format!(
+                "Failed to copy news Markdown {} to {}",
+                path.display(),
+                destination_path.display()
+            )
+        })?;
+        copied.push(relative_path.to_path_buf());
+    }
+
+    Ok(())
+}
+
+fn sorted_entries(path: &Path) -> Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(path)
+        .with_context(|| format!("Failed to read directory {}", path.display()))?
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("Failed to list directory {}", path.display()))?;
+    entries.sort_by_key(|entry| entry.path());
+    Ok(entries)
+}
+
+fn is_news_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with("-news"))
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+}
+
 pub fn sanitize_title(title: &str) -> String {
     title
         .chars()
@@ -280,6 +419,7 @@ pub fn determine_type(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn builds_article_markdown_with_frontmatter() {
@@ -434,6 +574,88 @@ mod tests {
         assert!(std::fs::read_to_string(&saved[1].path)
             .unwrap()
             .contains("Second duplicate body"));
+    }
+
+    #[test]
+    fn save_recommended_articles_copies_final_markdown_when_output_dir_is_set() {
+        let _guard = env_lock().lock().unwrap();
+        let target_root = unique_temp_path("article-collector-save-news-target");
+        let source_root = unique_temp_path("article-collector-save-news-source");
+        let output_dir = unique_temp_path("article-collector-save-output-dir");
+        std::fs::create_dir_all(&target_root).unwrap();
+        std::fs::create_dir_all(&source_root).unwrap();
+        let translation = source_root.join("first_translated.md");
+        std::fs::write(&translation, "First translated body").unwrap();
+        std::env::set_var("SAVE_PATH_TEMPLATE", "${TYPE}-news/");
+        std::env::set_var(crate::paths::OUTPUT_DIR_ENV, &output_dir);
+
+        let saved = save_recommended_articles_to_target(
+            &target_root,
+            &[crate::recommend::TranslatedRecommendedArticle {
+                item: serde_json::json!({
+                    "title": "First Recommended Article",
+                    "url": "https://example.com/first"
+                }),
+                translated_path: translation,
+            }],
+        )
+        .unwrap();
+
+        std::env::remove_var("SAVE_PATH_TEMPLATE");
+        std::env::remove_var(crate::paths::OUTPUT_DIR_ENV);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(
+            saved[0].repo_relative_path,
+            PathBuf::from("web-news").join(saved[0].repo_relative_path.file_name().unwrap())
+        );
+        assert!(output_dir.join(&saved[0].repo_relative_path).exists());
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join(&saved[0].repo_relative_path)).unwrap(),
+            std::fs::read_to_string(&saved[0].path).unwrap()
+        );
+    }
+
+    #[test]
+    fn copies_only_markdown_files_from_news_dirs_to_output_dir() {
+        let target_root = unique_temp_path("article-collector-news-target");
+        let output_dir = unique_temp_path("article-collector-output-dir");
+        std::fs::create_dir_all(target_root.join("hackernews-news/nested")).unwrap();
+        std::fs::create_dir_all(target_root.join("zenn-news")).unwrap();
+        std::fs::create_dir_all(target_root.join("articles/web")).unwrap();
+        std::fs::write(target_root.join("hackernews-news/first.md"), "First").unwrap();
+        std::fs::write(target_root.join("hackernews-news/first.json"), "{}").unwrap();
+        std::fs::write(
+            target_root.join("hackernews-news/nested/second.md"),
+            "Second",
+        )
+        .unwrap();
+        std::fs::write(target_root.join("zenn-news/third.md"), "Third").unwrap();
+        std::fs::write(target_root.join("articles/web/not-news.md"), "Skip").unwrap();
+
+        let copied = copy_final_markdown_files(&target_root, &output_dir).unwrap();
+
+        assert_eq!(
+            copied,
+            vec![
+                PathBuf::from("hackernews-news/first.md"),
+                PathBuf::from("hackernews-news/nested/second.md"),
+                PathBuf::from("zenn-news/third.md"),
+            ]
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("hackernews-news/first.md")).unwrap(),
+            "First"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("hackernews-news/nested/second.md")).unwrap(),
+            "Second"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("zenn-news/third.md")).unwrap(),
+            "Third"
+        );
+        assert!(!output_dir.join("hackernews-news/first.json").exists());
+        assert!(!output_dir.join("articles/web/not-news.md").exists());
     }
 
     #[test]
@@ -645,5 +867,10 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{}-{suffix}", std::process::id()))
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 }

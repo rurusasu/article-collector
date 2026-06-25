@@ -136,7 +136,7 @@ pub async fn collect_recommended(
         .await;
     }
 
-    let outdir = paths::outdir();
+    let outdir = paths::temp_dir();
     fs::create_dir_all(&outdir)?;
     let raw_path = paths::raw_json_path();
     fs::write(&raw_path, serde_json::to_string_pretty(&items)?)?;
@@ -252,7 +252,7 @@ async fn collect_recommended_articles(
     skipped_invalid: usize,
     config: &RecommendConfig,
 ) -> Result<RecommendationCollection> {
-    let outdir = paths::outdir();
+    let outdir = paths::temp_dir();
     let articles_dir = paths::recommended_articles_dir();
     fs::create_dir_all(&articles_dir)?;
 

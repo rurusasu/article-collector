@@ -41,7 +41,7 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
 
     // Translate main content
     let translated = translate_text(agent, &lang, &content).await?;
-    let outdir = paths::outdir();
+    let outdir = paths::temp_dir();
     fs::create_dir_all(&outdir)?;
     let translated_path = paths::translated_md_path();
     fs::write(&translated_path, &translated)?;
