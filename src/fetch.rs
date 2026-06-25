@@ -56,7 +56,7 @@ pub fn extract_devto_slug(url: &str) -> Result<String> {
 
 pub async fn fetch_url(url: &str) -> Result<()> {
     let result = fetch_url_items(url).await?;
-    let outdir = paths::outdir();
+    let outdir = paths::temp_dir();
     fs::create_dir_all(&outdir)?;
     let outfile = outdir.join("raw.json");
     fs::write(outfile, serde_json::to_string_pretty(&result)?)?;

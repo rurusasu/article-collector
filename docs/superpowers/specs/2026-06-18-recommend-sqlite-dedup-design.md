@@ -11,7 +11,7 @@ Add persistent deduplication to `article-collector recommend` so articles that w
 - Treat only items written to the current `raw.json` as seen.
 - Exclude previously seen items from later recommend runs.
 - Exit non-zero with `No new recommended articles found for <target>` when every collected candidate was already seen.
-- Use a stable default history database location outside `ARTICLE_COLLECTOR_OUTDIR`.
+- Use a stable default history database location outside `ARTICLE_COLLECTOR_TEMP_DIR`.
 - Allow the history database path to be overridden from TOML config.
 
 Out of scope:
@@ -44,7 +44,7 @@ history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 If `history_path` is omitted, use `dirs::config_dir().join("article-collector").join("recommend-history.sqlite")`. On Windows this resolves under `%APPDATA%` for normal desktop sessions. If `dirs::config_dir()` returns `None`, fail with a clear error telling the user to set `[recommend].history_path`.
 
-`ARTICLE_COLLECTOR_OUTDIR` continues to control only run artifacts such as `raw.json` and `translated.md`.
+`ARTICLE_COLLECTOR_TEMP_DIR` continues to control only temporary run artifacts such as `raw.json` and `translated.md`.
 
 ## Schema
 

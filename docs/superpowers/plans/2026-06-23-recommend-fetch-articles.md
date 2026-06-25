@@ -1048,7 +1048,7 @@ article-collector recommend https://example.com/links --limit 5 --config article
 Add:
 
 ```markdown
-`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。成果物は `ARTICLE_COLLECTOR_OUTDIR` 配下に作成される。
+`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。一時成果物は `ARTICLE_COLLECTOR_TEMP_DIR` 配下に作成される。
 
 ```text
 raw.json
@@ -1145,7 +1145,7 @@ New-Item -ItemType Directory -Force $smokeDir | Out-Null
 fetch_articles = true
 history_path = "$(($smokeDir -replace '\\', '/') + '/recommend-history.sqlite')"
 "@ | Set-Content -Encoding utf8 $configPath
-$env:ARTICLE_COLLECTOR_OUTDIR = $smokeDir
+$env:ARTICLE_COLLECTOR_TEMP_DIR = $smokeDir
 cargo run -- recommend hackernews --limit 1 --config $configPath
 ```
 
