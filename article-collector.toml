@@ -1,5 +1,5 @@
 [recommend]
-sources = ["hackernews", "devto", "zenn", "arxiv"]
+sources = ["hackernews", "devto", "zenn", "arxiv", "github-advisory"]
 limit = 30
 fetch_articles = false
 create_pr = false
@@ -8,3 +8,6 @@ create_pr = false
 [recommend.source.arxiv]
 limit = 10
 query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
+
+[recommend.source.github-advisory]
+limit = 10
