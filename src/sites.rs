@@ -22,6 +22,9 @@ pub enum RecommendSource {
         api_url: &'static str,
         default_query: &'static str,
     },
+    GitHubAdvisories {
+        api_url: &'static str,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -55,6 +58,7 @@ const HN_TOPSTORIES_API: &str = "https://hacker-news.firebaseio.com/v0/topstorie
 const DEVTO_ARTICLES_API: &str = "https://dev.to/api/articles?top=7";
 const ZENN_FEED_URL: &str = "https://zenn.dev/feed";
 const ARXIV_API_URL: &str = "https://export.arxiv.org/api/query";
+const GITHUB_ADVISORIES_API_URL: &str = "https://api.github.com/advisories";
 const DEFAULT_ARXIV_QUERY: &str = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:stat.ML";
 
 const TWITTER_FETCH_RULES: &[UrlRule] = &[
@@ -76,6 +80,7 @@ const YOUTUBE_SAVE_RULES: &[UrlRule] = &[
 const HACKERNEWS_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["news.ycombinator.com/item"])];
 const DEVTO_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["dev.to/"])];
 const ZENN_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["zenn.dev/"])];
+const GITHUB_ADVISORY_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["github.com/advisories/"])];
 
 const ARXIV_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["arxiv.org/"])];
 const DOI_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["doi.org/"])];
@@ -155,6 +160,18 @@ pub const SITES: &[Site] = &[
         recommend: Some(RecommendSource::ArxivSearch {
             api_url: ARXIV_API_URL,
             default_query: DEFAULT_ARXIV_QUERY,
+        }),
+    },
+    Site {
+        name: "github-advisory",
+        aliases: &["github-advisories", "ghsa"],
+        supported_urls: &["https://github.com/advisories/<ghsa-id>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: GITHUB_ADVISORY_FETCH_RULES,
+        save_type: "web",
+        save_rules: GITHUB_ADVISORY_FETCH_RULES,
+        recommend: Some(RecommendSource::GitHubAdvisories {
+            api_url: GITHUB_ADVISORIES_API_URL,
         }),
     },
     Site {
@@ -253,6 +270,20 @@ mod tests {
         assert_eq!(site_by_name("dev.to").unwrap().name, "devto");
     }
 
+    #[test]
+    fn resolves_github_advisory_site_name_aliases_and_recommend_source() {
+        let site = site_by_name("github-advisory").unwrap();
+        assert_eq!(site.name, "github-advisory");
+        assert_eq!(site_by_name("github-advisories").unwrap().name, site.name);
+        assert_eq!(site_by_name("ghsa").unwrap().name, site.name);
+        assert!(matches!(
+            site.recommend,
+            Some(RecommendSource::GitHubAdvisories { .. })
+        ));
+        assert!(recommendable_site_names().contains(&"github-advisory"));
+        assert!(supported_url_examples().contains(&"https://github.com/advisories/<ghsa-id>"));
+    }
+
     /// 検証: fetch route は site registry の URL rule から決まる
     /// 理由: サイト別 fetch 分岐を fetch.rs に散らさない
     /// リスク: 新しい site 追加時に複数ファイルを更新し忘れる
@@ -330,7 +361,7 @@ mod tests {
     fn lists_recommendable_site_names() {
         assert_eq!(
             recommendable_site_names(),
-            vec!["hackernews", "devto", "zenn", "arxiv"]
+            vec!["hackernews", "devto", "zenn", "arxiv", "github-advisory"]
         );
     }
 
@@ -340,11 +371,12 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 4);
+        assert_eq!(sites.len(), 5);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
         assert_eq!(sites[2].name, "zenn");
         assert_eq!(sites[3].name, "arxiv");
+        assert_eq!(sites[4].name, "github-advisory");
         assert!(sites.iter().all(|site| site.recommend.is_some()));
     }
 

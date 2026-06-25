@@ -632,6 +632,101 @@ fn devto_article_to_recommendation(data: &Value) -> Option<Value> {
     }))
 }
 
+async fn collect_github_advisories(api_url: &str, limit: usize) -> Result<Vec<Value>> {
+    let url = build_github_advisories_url(api_url, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let advisories: Vec<Value> = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
+        .context("Failed to parse GitHub Advisory response")?;
+
+    let mut items = Vec::new();
+    for advisory in advisories {
+        if items.len() >= limit {
+            break;
+        }
+        if let Some(item) = github_advisory_to_recommendation(&advisory, items.len() + 1) {
+            items.push(item);
+        }
+    }
+
+    Ok(items)
+}
+
+fn build_github_advisories_url(api_url: &str, limit: usize) -> Result<Url> {
+    let mut url = Url::parse(api_url).context("Invalid GitHub Advisory API URL")?;
+    url.query_pairs_mut()
+        .append_pair("per_page", &limit.to_string());
+    Ok(url)
+}
+
+fn github_advisory_to_recommendation(data: &Value, rank: usize) -> Option<Value> {
+    let url = data.get("html_url")?.as_str()?.trim();
+    if url.is_empty() {
+        return None;
+    }
+
+    let summary = data.get("summary")?.as_str()?.trim();
+    if summary.is_empty() {
+        return None;
+    }
+
+    let ghsa_id = data
+        .get("ghsa_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let cve_id = data
+        .get("cve_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let severity = data
+        .get("severity")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let description = data
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let published_at = data
+        .get("published_at")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let updated_at = data.get("updated_at").and_then(Value::as_str).unwrap_or("");
+    let title = if ghsa_id.is_empty() {
+        summary.to_string()
+    } else {
+        format!("{ghsa_id}: {summary}")
+    };
+    let content = format!(
+        "Title: {title}\nURL: {url}\nSeverity: {severity}\nCVE: {cve_id}\nGHSA: {ghsa_id}\nSummary: {summary}\nDescription: {description}"
+    );
+
+    Some(json!({
+        "rank": rank,
+        "source": "github-advisory",
+        "site": "github-advisory",
+        "title": title,
+        "url": url,
+        "content": content,
+        "published_at": published_at,
+        "updated_at": updated_at,
+        "severity": severity,
+        "ghsa_id": ghsa_id,
+        "cve_id": cve_id
+    }))
+}
+
 async fn collect_zenn_feed(feed_url: &str, limit: usize) -> Result<Vec<Value>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -1131,6 +1226,10 @@ async fn collect_source(
             )
             .await?
         }
+        RecommendSource::GitHubAdvisories { api_url } => {
+            reject_query_override(query)?;
+            collect_github_advisories(api_url, limit).await?
+        }
     };
 
     for item in &mut items {
@@ -1331,6 +1430,19 @@ mod tests {
         assert!(default_query.contains("cat:cs.CV"));
         assert!(default_query.contains("cat:cs.LG"));
         assert!(default_query.contains("stat.ML"));
+    }
+
+    #[test]
+    fn resolves_github_advisory_site_name_to_api() {
+        let RecommendationTarget::Source {
+            site_name,
+            source: RecommendSource::GitHubAdvisories { api_url },
+        } = resolve_recommendation_target("github-advisory").unwrap()
+        else {
+            panic!("github-advisory should resolve to GitHub Advisory API");
+        };
+        assert_eq!(site_name, "github-advisory");
+        assert_eq!(api_url, "https://api.github.com/advisories");
     }
 
     /// 検証: all は registry 上の全 recommend source 収集として扱う
@@ -1739,6 +1851,49 @@ mod tests {
         assert!(url.as_str().contains("max_results=5"));
         assert!(url.as_str().contains("sortBy=submittedDate"));
         assert!(url.as_str().contains("sortOrder=descending"));
+    }
+
+    #[test]
+    fn builds_github_advisories_url_with_limit() {
+        let url = build_github_advisories_url("https://api.github.com/advisories", 2).unwrap();
+
+        assert_eq!(url.as_str(), "https://api.github.com/advisories?per_page=2");
+    }
+
+    #[test]
+    fn converts_github_advisory_to_recommendation() {
+        let item = json!({
+            "ghsa_id": "GHSA-abcd-1234",
+            "cve_id": "CVE-2026-0001",
+            "summary": "Example advisory",
+            "description": "Patch the affected dependency.",
+            "severity": "high",
+            "html_url": "https://github.com/advisories/GHSA-abcd-1234",
+            "published_at": "2026-06-01T00:00:00Z",
+            "updated_at": "2026-06-02T00:00:00Z"
+        });
+
+        let recommendation = github_advisory_to_recommendation(&item, 1).unwrap();
+
+        assert_eq!(recommendation["rank"], 1);
+        assert_eq!(recommendation["source"], "github-advisory");
+        assert_eq!(recommendation["site"], "github-advisory");
+        assert_eq!(recommendation["title"], "GHSA-abcd-1234: Example advisory");
+        assert_eq!(
+            recommendation["url"],
+            "https://github.com/advisories/GHSA-abcd-1234"
+        );
+        assert_eq!(recommendation["severity"], "high");
+        assert_eq!(recommendation["ghsa_id"], "GHSA-abcd-1234");
+        assert_eq!(recommendation["cve_id"], "CVE-2026-0001");
+        assert!(recommendation["content"]
+            .as_str()
+            .unwrap()
+            .contains("Severity: high"));
+        assert!(recommendation["content"]
+            .as_str()
+            .unwrap()
+            .contains("CVE: CVE-2026-0001"));
     }
 
     /// 検証: 空の query override は arXiv 既定 query に戻す

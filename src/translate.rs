@@ -156,7 +156,7 @@ async fn call_acp_agent(agent: AcpAgent, prompt: &str) -> Result<String> {
         bail!("ACP agent stopped before completing translation: {stop_reason}");
     }
 
-    let translated = translated.trim().to_string();
+    let translated = strip_acp_translation_boilerplate(translated.trim());
     if translated.is_empty() {
         bail!("ACP agent returned empty translation");
     }
@@ -470,6 +470,17 @@ fn append_acp_text_update(message: &Value, output: &mut String) {
     }
 }
 
+fn strip_acp_translation_boilerplate(output: &str) -> String {
+    const CODEX_SKILL_WARNING: &str = "Warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.";
+
+    output
+        .strip_prefix(CODEX_SKILL_WARNING)
+        .map(|rest| rest.trim_start_matches(['\r', '\n']))
+        .unwrap_or(output)
+        .trim()
+        .to_string()
+}
+
 fn format_rpc_error(error: &Value) -> String {
     let code = error
         .get("code")
@@ -593,6 +604,15 @@ mod tests {
         );
 
         assert_eq!(output, "hello");
+    }
+
+    #[test]
+    fn strips_codex_skill_warning_banner_from_translation_output() {
+        let translated = strip_acp_translation_boilerplate(
+            "Warning: Skill descriptions were shortened to fit the 2% skills context budget. Codex can still see every skill, but some descriptions are shorter. Disable unused skills or plugins to leave more room for the rest.\n\n## 翻訳本文\n\n脆弱性の詳細",
+        );
+
+        assert_eq!(translated, "## 翻訳本文\n\n脆弱性の詳細");
     }
 
     /// 検証: permission request は cancelled outcome で返す
