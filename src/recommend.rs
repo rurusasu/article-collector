@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use quick_xml::events::{BytesStart, Event};
+use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::reader::Reader;
 use reqwest::Url;
 use scraper::{Html, Selector};
@@ -41,6 +41,16 @@ struct ArxivFeedEntry {
     updated_at: String,
     authors: Vec<String>,
     categories: Vec<String>,
+}
+
+#[derive(Default)]
+struct GenericFeedItem {
+    title: String,
+    url: String,
+    description: String,
+    published_at: String,
+    updated_at: String,
+    author: String,
 }
 
 enum RecommendationTarget<'a> {
@@ -457,7 +467,9 @@ fn validate_limit(limit: usize) -> Result<()> {
 
 fn reject_query_override(query: Option<&str>) -> Result<()> {
     if query.is_some_and(|query| !query.trim().is_empty()) {
-        bail!("--query is only supported for queryable recommendation sources such as arxiv");
+        bail!(
+            "--query is only supported for queryable recommendation sources such as arxiv, nvd, and github-search"
+        );
     }
     Ok(())
 }
@@ -727,6 +739,274 @@ fn github_advisory_to_recommendation(data: &Value, rank: usize) -> Option<Value>
     }))
 }
 
+async fn collect_cisa_kev(catalog_url: &str, limit: usize) -> Result<Vec<Value>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let catalog: Value = client
+        .get(catalog_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
+        .context("Failed to parse CISA KEV catalog response")?;
+
+    parse_cisa_kev_catalog(&catalog, limit)
+}
+
+fn parse_cisa_kev_catalog(catalog: &Value, limit: usize) -> Result<Vec<Value>> {
+    let vulnerabilities = catalog
+        .get("vulnerabilities")
+        .and_then(Value::as_array)
+        .context("CISA KEV catalog missing vulnerabilities[]")?;
+    let mut vulnerabilities = vulnerabilities.iter().collect::<Vec<_>>();
+    vulnerabilities.sort_by(|a, b| {
+        let a_date = a.get("dateAdded").and_then(Value::as_str).unwrap_or("");
+        let b_date = b.get("dateAdded").and_then(Value::as_str).unwrap_or("");
+        b_date.cmp(a_date)
+    });
+
+    Ok(vulnerabilities
+        .into_iter()
+        .filter_map(cisa_kev_vulnerability_to_recommendation)
+        .take(limit)
+        .enumerate()
+        .map(|(index, mut item)| {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("rank".to_string(), json!(index + 1));
+            }
+            item
+        })
+        .collect())
+}
+
+fn cisa_kev_vulnerability_to_recommendation(data: &Value) -> Option<Value> {
+    let cve_id = data.get("cveID")?.as_str()?.trim();
+    if cve_id.is_empty() {
+        return None;
+    }
+
+    let vendor = data
+        .get("vendorProject")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let product = data
+        .get("product")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let vulnerability_name = data
+        .get("vulnerabilityName")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let date_added = data
+        .get("dateAdded")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let due_date = data
+        .get("dueDate")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let ransomware = data
+        .get("knownRansomwareCampaignUse")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let description = data
+        .get("shortDescription")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let required_action = data
+        .get("requiredAction")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let title = if vulnerability_name.is_empty() {
+        cve_id.to_string()
+    } else {
+        format!("{cve_id}: {vulnerability_name}")
+    };
+    let url = format!("https://nvd.nist.gov/vuln/detail/{cve_id}");
+    let content = format!(
+        "Title: {title}\nURL: {url}\nVendor: {vendor}\nProduct: {product}\nDate added: {date_added}\nDue date: {due_date}\nKnown ransomware campaign use: {ransomware}\nDescription: {description}\nRequired action: {required_action}"
+    );
+
+    Some(json!({
+        "source": "cisa-kev",
+        "site": "cisa-kev",
+        "title": title,
+        "url": url,
+        "content": content,
+        "cve_id": cve_id,
+        "vendor": vendor,
+        "product": product,
+        "vulnerability_name": vulnerability_name,
+        "date_added": date_added,
+        "due_date": due_date,
+        "known_ransomware_campaign_use": ransomware,
+        "required_action": required_action,
+        "description": description
+    }))
+}
+
+async fn collect_nvd_cves(api_url: &str, query: Option<&str>, limit: usize) -> Result<Vec<Value>> {
+    let url = build_nvd_cves_url(api_url, query, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let response: Value = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
+        .context("Failed to parse NVD CVE response")?;
+
+    parse_nvd_cve_response(&response, limit)
+}
+
+fn build_nvd_cves_url(api_url: &str, query: Option<&str>, limit: usize) -> Result<Url> {
+    let mut url = Url::parse(api_url).context("Invalid NVD CVE API URL")?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("resultsPerPage", &limit.to_string());
+        pairs.append_pair("noRejected", "");
+        if let Some(query) = query.filter(|query| !query.trim().is_empty()) {
+            pairs.append_pair("keywordSearch", query.trim());
+        }
+    }
+    Ok(url)
+}
+
+fn parse_nvd_cve_response(response: &Value, limit: usize) -> Result<Vec<Value>> {
+    let vulnerabilities = response
+        .get("vulnerabilities")
+        .and_then(Value::as_array)
+        .context("NVD CVE response missing vulnerabilities[]")?;
+
+    Ok(vulnerabilities
+        .iter()
+        .filter_map(|item| item.get("cve"))
+        .filter_map(nvd_cve_to_recommendation)
+        .take(limit)
+        .enumerate()
+        .map(|(index, mut item)| {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("rank".to_string(), json!(index + 1));
+            }
+            item
+        })
+        .collect())
+}
+
+fn nvd_cve_to_recommendation(cve: &Value) -> Option<Value> {
+    let cve_id = cve.get("id")?.as_str()?.trim();
+    if cve_id.is_empty() {
+        return None;
+    }
+
+    let description = preferred_nvd_description(cve);
+    let (severity, cvss_score) = preferred_nvd_cvss(cve);
+    let published_at = cve.get("published").and_then(Value::as_str).unwrap_or("");
+    let updated_at = cve
+        .get("lastModified")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let title = if description.is_empty() {
+        cve_id.to_string()
+    } else {
+        format!("{cve_id}: {description}")
+    };
+    let url = format!("https://nvd.nist.gov/vuln/detail/{cve_id}");
+    let content = format!(
+        "Title: {title}\nURL: {url}\nSeverity: {severity}\nCVSS score: {}\nPublished: {published_at}\nUpdated: {updated_at}\nDescription: {description}",
+        cvss_score.map(|score| score.to_string()).unwrap_or_default()
+    );
+
+    Some(json!({
+        "source": "nvd",
+        "site": "nvd",
+        "title": title,
+        "url": url,
+        "content": content,
+        "published_at": published_at,
+        "updated_at": updated_at,
+        "severity": severity,
+        "cvss_score": cvss_score,
+        "cve_id": cve_id,
+        "description": description
+    }))
+}
+
+fn preferred_nvd_description(cve: &Value) -> String {
+    let descriptions = cve
+        .get("descriptions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    descriptions
+        .iter()
+        .copied()
+        .find(|description| {
+            description
+                .get("lang")
+                .and_then(Value::as_str)
+                .is_some_and(|lang| lang.eq_ignore_ascii_case("en"))
+        })
+        .or_else(|| descriptions.first().copied())
+        .and_then(|description| description.get("value"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn preferred_nvd_cvss(cve: &Value) -> (String, Option<f64>) {
+    let Some(metrics) = cve.get("metrics") else {
+        return (String::new(), None);
+    };
+
+    for key in [
+        "cvssMetricV40",
+        "cvssMetricV31",
+        "cvssMetricV30",
+        "cvssMetricV2",
+    ] {
+        let Some(metric) = metrics
+            .get(key)
+            .and_then(Value::as_array)
+            .and_then(|items| items.first())
+        else {
+            continue;
+        };
+        let score = metric
+            .get("cvssData")
+            .and_then(|data| data.get("baseScore"))
+            .and_then(Value::as_f64);
+        let severity = metric
+            .get("cvssData")
+            .and_then(|data| data.get("baseSeverity"))
+            .or_else(|| metric.get("baseSeverity"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        return (severity, score);
+    }
+
+    (String::new(), None)
+}
+
 async fn collect_zenn_feed(feed_url: &str, limit: usize) -> Result<Vec<Value>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -835,6 +1115,274 @@ fn zenn_item_to_recommendation(item: ZennFeedItem) -> Option<Value> {
         "url": url,
         "author": item.author,
         "published_at": item.published_at,
+        "description": item.description,
+        "content": content
+    }))
+}
+
+async fn collect_rss_feed(
+    feed_url: &str,
+    site_name: &'static str,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let feed = client
+        .get(feed_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    parse_rss_feed(&feed, site_name, limit)
+}
+
+fn parse_rss_feed(feed: &str, site_name: &'static str, limit: usize) -> Result<Vec<Value>> {
+    let mut reader = Reader::from_str(feed);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut items = Vec::new();
+    let mut current_item: Option<GenericFeedItem> = None;
+    let mut current_field: Option<String> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "item" {
+                    current_item = Some(GenericFeedItem::default());
+                } else if current_item.is_some() {
+                    current_field = Some(name);
+                }
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_rss_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_rss_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_rss_text(item, field, &xml_general_ref_text(&reference)?);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "item" {
+                    if let Some(mut item) = current_item
+                        .take()
+                        .and_then(|item| generic_feed_item_to_recommendation(item, site_name))
+                    {
+                        if let Some(object) = item.as_object_mut() {
+                            object.insert("rank".to_string(), json!(items.len() + 1));
+                        }
+                        items.push(item);
+                    }
+                    if items.len() >= limit {
+                        break;
+                    }
+                }
+                current_field = None;
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => {
+                bail!(
+                    "Failed to parse RSS feed for {site_name} at byte {}: {err}",
+                    reader.error_position()
+                );
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(items)
+}
+
+fn apply_generic_rss_text(item: &mut GenericFeedItem, field: &str, text: &str) {
+    match field {
+        "title" => append_xml_text(&mut item.title, text),
+        "link" => append_xml_text(&mut item.url, text),
+        "description" | "encoded" => append_xml_text(&mut item.description, text),
+        "pubDate" | "published" => append_xml_text(&mut item.published_at, text),
+        "updated" => append_xml_text(&mut item.updated_at, text),
+        "creator" | "author" => append_xml_text(&mut item.author, text),
+        _ => {}
+    }
+}
+
+async fn collect_atom_feed(
+    feed_url: &str,
+    site_name: &'static str,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let feed = client
+        .get(feed_url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    parse_atom_feed(&feed, site_name, limit)
+}
+
+fn parse_atom_feed(feed: &str, site_name: &'static str, limit: usize) -> Result<Vec<Value>> {
+    let mut reader = Reader::from_str(feed);
+    reader.config_mut().trim_text(true);
+
+    let mut buf = Vec::new();
+    let mut items = Vec::new();
+    let mut current_item: Option<GenericFeedItem> = None;
+    let mut current_field: Option<String> = None;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "entry" {
+                    current_item = Some(GenericFeedItem::default());
+                } else if current_item.is_some() {
+                    apply_atom_link(&mut current_item, &element)?;
+                    current_field = generic_atom_text_field(&name);
+                }
+            }
+            Ok(Event::Empty(element)) if current_item.is_some() => {
+                apply_atom_link(&mut current_item, &element)?;
+            }
+            Ok(Event::Text(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_atom_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::CData(text)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_atom_text(item, field, &text.decode()?);
+                }
+            }
+            Ok(Event::GeneralRef(reference)) => {
+                if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
+                {
+                    apply_generic_atom_text(item, field, &xml_general_ref_text(&reference)?);
+                }
+            }
+            Ok(Event::End(element)) => {
+                let name = local_xml_name(element.name().as_ref());
+                if name == "entry" {
+                    if let Some(mut item) = current_item
+                        .take()
+                        .and_then(|item| generic_feed_item_to_recommendation(item, site_name))
+                    {
+                        if let Some(object) = item.as_object_mut() {
+                            object.insert("rank".to_string(), json!(items.len() + 1));
+                        }
+                        items.push(item);
+                    }
+                    if items.len() >= limit {
+                        break;
+                    }
+                }
+                current_field = None;
+            }
+            Ok(Event::Eof) => break,
+            Err(err) => {
+                bail!(
+                    "Failed to parse Atom feed for {site_name} at byte {}: {err}",
+                    reader.error_position()
+                );
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(items)
+}
+
+fn apply_atom_link(
+    current_item: &mut Option<GenericFeedItem>,
+    element: &BytesStart<'_>,
+) -> Result<()> {
+    let Some(item) = current_item.as_mut() else {
+        return Ok(());
+    };
+    if local_xml_name(element.name().as_ref()) != "link" {
+        return Ok(());
+    }
+    let rel = xml_attr_value(element, b"rel")?;
+    if rel.as_deref().unwrap_or("alternate") != "alternate" {
+        return Ok(());
+    }
+    if let Some(href) = xml_attr_value(element, b"href")? {
+        item.url = normalize_url(href);
+    }
+    Ok(())
+}
+
+fn generic_atom_text_field(name: &str) -> Option<String> {
+    match name {
+        "title" | "summary" | "content" | "published" | "updated" | "link" => {
+            Some(name.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn apply_generic_atom_text(item: &mut GenericFeedItem, field: &str, text: &str) {
+    match field {
+        "title" => append_xml_text(&mut item.title, text),
+        "summary" | "content" => append_xml_text(&mut item.description, text),
+        "published" => append_xml_text(&mut item.published_at, text),
+        "updated" => append_xml_text(&mut item.updated_at, text),
+        "link" if item.url.is_empty() => append_xml_text(&mut item.url, text),
+        _ => {}
+    }
+}
+
+fn generic_feed_item_to_recommendation(
+    item: GenericFeedItem,
+    site_name: &'static str,
+) -> Option<Value> {
+    let url = normalize_url(item.url);
+    if url.is_empty() {
+        return None;
+    }
+
+    let title = if item.title.is_empty() {
+        "Untitled".to_string()
+    } else {
+        item.title
+    };
+    let content = format!(
+        "Title: {title}\nURL: {url}\nAuthor: {}\nPublished: {}\nUpdated: {}\nDescription: {}",
+        item.author, item.published_at, item.updated_at, item.description
+    );
+
+    Some(json!({
+        "source": site_name,
+        "site": site_name,
+        "title": title,
+        "url": url,
+        "author": item.author,
+        "published_at": item.published_at,
+        "updated_at": item.updated_at,
         "description": item.description,
         "content": content
     }))
@@ -1025,6 +1573,101 @@ fn arxiv_entry_to_recommendation(entry: ArxivFeedEntry) -> Option<Value> {
     }))
 }
 
+async fn collect_github_search_repositories(
+    api_url: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let url = build_github_search_url(api_url, query, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let response: Value = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await
+        .context("Failed to parse GitHub Search response")?;
+    let repositories = response
+        .get("items")
+        .and_then(Value::as_array)
+        .context("GitHub Search response missing items[]")?;
+
+    Ok(repositories
+        .iter()
+        .filter_map(|repository| github_search_repository_to_recommendation(repository, 0))
+        .take(limit)
+        .enumerate()
+        .map(|(index, mut item)| {
+            if let Some(object) = item.as_object_mut() {
+                object.insert("rank".to_string(), json!(index + 1));
+            }
+            item
+        })
+        .collect())
+}
+
+fn build_github_search_url(api_url: &str, query: &str, limit: usize) -> Result<Url> {
+    let query = query.trim();
+    if query.is_empty() {
+        bail!("github-search requires a non-empty query");
+    }
+    let mut url = Url::parse(api_url).context("Invalid GitHub Search API URL")?;
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("sort", "stars")
+        .append_pair("order", "desc")
+        .append_pair("per_page", &limit.to_string());
+    Ok(url)
+}
+
+fn github_search_repository_to_recommendation(data: &Value, rank: usize) -> Option<Value> {
+    let url = data.get("html_url")?.as_str()?.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let full_name = data.get("full_name")?.as_str()?.trim();
+    if full_name.is_empty() {
+        return None;
+    }
+    let description = data
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let language = data
+        .get("language")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let stars = data
+        .get("stargazers_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let updated_at = data.get("updated_at").and_then(Value::as_str).unwrap_or("");
+    let pushed_at = data.get("pushed_at").and_then(Value::as_str).unwrap_or("");
+    let content = format!(
+        "Title: {full_name}\nURL: {url}\nStars: {stars}\nLanguage: {language}\nUpdated: {updated_at}\nPushed: {pushed_at}\nDescription: {description}"
+    );
+
+    Some(json!({
+        "rank": rank,
+        "source": "github-search",
+        "site": "github-search",
+        "title": full_name,
+        "url": url,
+        "content": content,
+        "description": description,
+        "stars": stars,
+        "language": language,
+        "updated_at": updated_at,
+        "pushed_at": pushed_at
+    }))
+}
+
 fn local_xml_name(name: &[u8]) -> String {
     let raw = String::from_utf8_lossy(name);
     raw.rsplit_once(':')
@@ -1042,6 +1685,30 @@ fn xml_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>
         }
     }
     Ok(None)
+}
+
+fn append_xml_text(target: &mut String, text: &str) {
+    let text = normalize_xml_text(text);
+    if !text.is_empty() {
+        target.push_str(&text);
+    }
+}
+
+fn xml_general_ref_text(reference: &BytesRef<'_>) -> Result<String> {
+    if let Some(ch) = reference.resolve_char_ref()? {
+        return Ok(ch.to_string());
+    }
+
+    let decoded = reference.decode()?;
+    let text = match decoded.as_ref() {
+        "amp" => "&".to_string(),
+        "lt" => "<".to_string(),
+        "gt" => ">".to_string(),
+        "quot" => "\"".to_string(),
+        "apos" => "'".to_string(),
+        name => format!("&{name};"),
+    };
+    Ok(text)
 }
 
 fn normalize_xml_text(text: &str) -> String {
@@ -1151,7 +1818,12 @@ fn source_plan_for_parts(
     let source_config = source_config_for(site_name, config);
     let source_limit = source_config.and_then(|source| source.limit);
     let query = effective_query(cli_query, source_config);
-    let limit = effective_limit(cli_limit, config.limit, source_limit)?;
+    let limit = effective_source_limit(
+        cli_limit,
+        config.limit,
+        source_limit,
+        default_limit_for_source(source),
+    )?;
 
     Ok(SourcePlan {
         site_name,
@@ -1159,6 +1831,16 @@ fn source_plan_for_parts(
         limit,
         query,
     })
+}
+
+fn default_limit_for_source(source: RecommendSource) -> Option<usize> {
+    match source {
+        RecommendSource::CisaKev { .. }
+        | RecommendSource::NvdCves { .. }
+        | RecommendSource::GitHubAdvisories { .. }
+        | RecommendSource::GitHubSearch { .. } => Some(10),
+        _ => None,
+    }
 }
 
 fn source_config_for<'a>(
@@ -1173,9 +1855,19 @@ fn effective_limit(
     config_limit: Option<usize>,
     source_limit: Option<usize>,
 ) -> Result<usize> {
+    effective_source_limit(cli_limit, config_limit, source_limit, None)
+}
+
+fn effective_source_limit(
+    cli_limit: Option<usize>,
+    config_limit: Option<usize>,
+    source_limit: Option<usize>,
+    source_default_limit: Option<usize>,
+) -> Result<usize> {
     let limit = cli_limit
         .or(source_limit)
         .or(config_limit)
+        .or(source_default_limit)
         .unwrap_or(DEFAULT_LIMIT);
     validate_limit(limit)?;
     Ok(limit)
@@ -1229,6 +1921,30 @@ async fn collect_source(
         RecommendSource::GitHubAdvisories { api_url } => {
             reject_query_override(query)?;
             collect_github_advisories(api_url, limit).await?
+        }
+        RecommendSource::CisaKev { catalog_url } => {
+            reject_query_override(query)?;
+            collect_cisa_kev(catalog_url, limit).await?
+        }
+        RecommendSource::NvdCves { api_url } => collect_nvd_cves(api_url, query, limit).await?,
+        RecommendSource::RssFeed { feed_url } => {
+            reject_query_override(query)?;
+            collect_rss_feed(feed_url, site_name, limit).await?
+        }
+        RecommendSource::AtomFeed { feed_url } => {
+            reject_query_override(query)?;
+            collect_atom_feed(feed_url, site_name, limit).await?
+        }
+        RecommendSource::GitHubSearch {
+            api_url,
+            default_query,
+        } => {
+            collect_github_search_repositories(
+                api_url,
+                query_override_or_default(query, default_query),
+                limit,
+            )
+            .await?
         }
     };
 
@@ -1712,6 +2428,24 @@ mod tests {
         assert_eq!(plan.query.as_deref(), Some("cat:cs.SE"));
     }
 
+    #[test]
+    fn direct_rate_limited_sources_use_low_code_defaults() {
+        let config = RecommendConfig::default();
+
+        let nvd =
+            source_plan_for_site(sites::site_by_name("nvd").unwrap(), None, None, &config).unwrap();
+        let github_search = source_plan_for_site(
+            sites::site_by_name("github-search").unwrap(),
+            None,
+            None,
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(nvd.limit, 10);
+        assert_eq!(github_search.limit, 10);
+    }
+
     /// 検証: limit は 1 以上 100 以下だけ許可する
     /// 理由: 誤入力で大量の外部リクエストを発生させない
     /// リスク: limit=0 や巨大値で空出力または過剰通信になる
@@ -1894,6 +2628,234 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("CVE: CVE-2026-0001"));
+    }
+
+    #[test]
+    fn parses_cisa_kev_catalog_with_unique_cve_urls() {
+        let catalog = json!({
+            "vulnerabilities": [
+                {
+                    "cveID": "CVE-2026-0001",
+                    "vendorProject": "Example",
+                    "product": "Product",
+                    "vulnerabilityName": "Example Vuln",
+                    "dateAdded": "2026-06-01",
+                    "shortDescription": "Exploit is observed in the wild.",
+                    "requiredAction": "Apply updates",
+                    "dueDate": "2026-06-20",
+                    "knownRansomwareCampaignUse": "Known"
+                },
+                {
+                    "cveID": "CVE-2026-0002",
+                    "vendorProject": "Other",
+                    "product": "Thing",
+                    "vulnerabilityName": "Other Vuln",
+                    "dateAdded": "2026-06-02",
+                    "shortDescription": "Second exploit.",
+                    "requiredAction": "Mitigate",
+                    "dueDate": "2026-06-22",
+                    "knownRansomwareCampaignUse": "Unknown"
+                }
+            ]
+        });
+
+        let items = parse_cisa_kev_catalog(&catalog, 2).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["source"], "cisa-kev");
+        assert_eq!(items[0]["site"], "cisa-kev");
+        assert_eq!(items[0]["cve_id"], "CVE-2026-0002");
+        assert_eq!(
+            items[0]["url"],
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-0002"
+        );
+        assert_eq!(items[0]["date_added"], "2026-06-02");
+        assert_eq!(items[0]["due_date"], "2026-06-22");
+        assert_ne!(items[0]["url"], items[1]["url"]);
+        assert!(items[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Required action: Mitigate"));
+    }
+
+    #[test]
+    fn builds_nvd_cve_url_with_optional_keyword_query() {
+        let url = build_nvd_cves_url(
+            "https://services.nvd.nist.gov/rest/json/cves/2.0",
+            Some("rust openssl"),
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(url.host_str(), Some("services.nvd.nist.gov"));
+        assert!(url.as_str().contains("resultsPerPage=2"));
+        assert!(url.as_str().contains("noRejected"));
+        assert!(url.as_str().contains("keywordSearch=rust+openssl"));
+    }
+
+    #[test]
+    fn parses_nvd_cve_response() {
+        let response = json!({
+            "vulnerabilities": [
+                {
+                    "cve": {
+                        "id": "CVE-2026-0003",
+                        "published": "2026-06-03T00:00:00.000",
+                        "lastModified": "2026-06-04T00:00:00.000",
+                        "descriptions": [
+                            {"lang": "ja", "value": "Japanese text"},
+                            {"lang": "en", "value": "English vulnerability description"}
+                        ],
+                        "metrics": {
+                            "cvssMetricV31": [
+                                {
+                                    "cvssData": {
+                                        "baseScore": 9.8,
+                                        "baseSeverity": "CRITICAL"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        });
+
+        let items = parse_nvd_cve_response(&response, 5).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "nvd");
+        assert_eq!(items[0]["site"], "nvd");
+        assert_eq!(items[0]["cve_id"], "CVE-2026-0003");
+        assert_eq!(
+            items[0]["url"],
+            "https://nvd.nist.gov/vuln/detail/CVE-2026-0003"
+        );
+        assert_eq!(items[0]["severity"], "CRITICAL");
+        assert_eq!(items[0]["cvss_score"], 9.8);
+        assert!(items[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("English vulnerability description"));
+    }
+
+    #[test]
+    fn parses_generic_rss_feed() {
+        let feed = r#"
+            <rss><channel>
+                <item>
+                    <title>AWS launches example service</title>
+                    <link>https://aws.amazon.com/about-aws/whats-new/example/</link>
+                    <description>Launch summary</description>
+                    <pubDate>Thu, 25 Jun 2026 00:00:00 GMT</pubDate>
+                </item>
+            </channel></rss>
+        "#;
+
+        let items = parse_rss_feed(feed, "aws-whatsnew", 1).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["rank"], 1);
+        assert_eq!(items[0]["source"], "aws-whatsnew");
+        assert_eq!(items[0]["site"], "aws-whatsnew");
+        assert_eq!(items[0]["title"], "AWS launches example service");
+        assert_eq!(
+            items[0]["url"],
+            "https://aws.amazon.com/about-aws/whats-new/example/"
+        );
+        assert_eq!(items[0]["published_at"], "Thu, 25 Jun 2026 00:00:00 GMT");
+    }
+
+    #[test]
+    fn parses_rss_links_with_escaped_query_params() {
+        let feed = r#"
+            <rss><channel>
+                <item>
+                    <title>InfoQ example</title>
+                    <link>https://www.infoq.com/news/example/?utm_campaign=infoq_content&amp;utm_source=infoq&amp;utm_medium=feed</link>
+                    <description>InfoQ summary</description>
+                    <pubDate>Thu, 25 Jun 2026 07:02:00 GMT</pubDate>
+                </item>
+            </channel></rss>
+        "#;
+
+        let items = parse_rss_feed(feed, "infoq", 1).unwrap();
+
+        assert_eq!(
+            items[0]["url"],
+            "https://www.infoq.com/news/example/?utm_campaign=infoq_content&utm_source=infoq&utm_medium=feed"
+        );
+    }
+
+    #[test]
+    fn parses_generic_atom_feed() {
+        let feed = r#"
+            <feed xmlns="http://www.w3.org/2005/Atom">
+                <entry>
+                    <title>Architecture note</title>
+                    <link href="https://martinfowler.com/articles/example.html" rel="alternate"/>
+                    <summary>Practical architecture note.</summary>
+                    <updated>2026-06-24T00:00:00Z</updated>
+                    <published>2026-06-23T00:00:00Z</published>
+                </entry>
+            </feed>
+        "#;
+
+        let items = parse_atom_feed(feed, "martinfowler", 1).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "martinfowler");
+        assert_eq!(items[0]["site"], "martinfowler");
+        assert_eq!(items[0]["title"], "Architecture note");
+        assert_eq!(
+            items[0]["url"],
+            "https://martinfowler.com/articles/example.html"
+        );
+        assert_eq!(items[0]["published_at"], "2026-06-23T00:00:00Z");
+        assert_eq!(items[0]["updated_at"], "2026-06-24T00:00:00Z");
+    }
+
+    #[test]
+    fn builds_github_search_url_with_query() {
+        let url = build_github_search_url(
+            "https://api.github.com/search/repositories",
+            "stars:>1000 pushed:>2026-06-01",
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(url.host_str(), Some("api.github.com"));
+        assert!(url.as_str().contains("q=stars%3A%3E1000"));
+        assert!(url.as_str().contains("sort=stars"));
+        assert!(url.as_str().contains("order=desc"));
+        assert!(url.as_str().contains("per_page=2"));
+    }
+
+    #[test]
+    fn converts_github_search_repository_to_recommendation() {
+        let item = json!({
+            "full_name": "example/tool",
+            "html_url": "https://github.com/example/tool",
+            "description": "Useful infrastructure tool",
+            "stargazers_count": 1234,
+            "language": "Rust",
+            "updated_at": "2026-06-24T00:00:00Z",
+            "pushed_at": "2026-06-23T00:00:00Z"
+        });
+
+        let recommendation = github_search_repository_to_recommendation(&item, 1).unwrap();
+
+        assert_eq!(recommendation["rank"], 1);
+        assert_eq!(recommendation["source"], "github-search");
+        assert_eq!(recommendation["site"], "github-search");
+        assert_eq!(recommendation["title"], "example/tool");
+        assert_eq!(recommendation["url"], "https://github.com/example/tool");
+        assert_eq!(recommendation["stars"], 1234);
+        assert_eq!(recommendation["language"], "Rust");
+        assert!(recommendation["content"]
+            .as_str()
+            .unwrap()
+            .contains("Pushed: 2026-06-23T00:00:00Z"));
     }
 
     /// 検証: 空の query override は arXiv 既定 query に戻す

@@ -1,5 +1,21 @@
 [recommend]
-sources = ["hackernews", "devto", "zenn", "arxiv", "github-advisory"]
+sources = [
+  "hackernews",
+  "devto",
+  "zenn",
+  "arxiv",
+  "github-advisory",
+  "cisa-kev",
+  "nvd",
+  "aws-whatsnew",
+  "aws-security",
+  "google-cloud-blog",
+  "kubernetes",
+  "cncf",
+  "infoq",
+  "martinfowler",
+  "github-search",
+]
 limit = 30
 fetch_articles = false
 create_pr = false
@@ -11,3 +27,13 @@ query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs
 
 [recommend.source.github-advisory]
 limit = 10
+
+[recommend.source.cisa-kev]
+limit = 10
+
+[recommend.source.nvd]
+limit = 5
+
+[recommend.source.github-search]
+limit = 5
+query = "stars:>1000 pushed:>2026-01-01 archived:false"

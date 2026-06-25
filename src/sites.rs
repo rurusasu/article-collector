@@ -25,6 +25,22 @@ pub enum RecommendSource {
     GitHubAdvisories {
         api_url: &'static str,
     },
+    CisaKev {
+        catalog_url: &'static str,
+    },
+    NvdCves {
+        api_url: &'static str,
+    },
+    RssFeed {
+        feed_url: &'static str,
+    },
+    AtomFeed {
+        feed_url: &'static str,
+    },
+    GitHubSearch {
+        api_url: &'static str,
+        default_query: &'static str,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -59,7 +75,19 @@ const DEVTO_ARTICLES_API: &str = "https://dev.to/api/articles?top=7";
 const ZENN_FEED_URL: &str = "https://zenn.dev/feed";
 const ARXIV_API_URL: &str = "https://export.arxiv.org/api/query";
 const GITHUB_ADVISORIES_API_URL: &str = "https://api.github.com/advisories";
+const CISA_KEV_CATALOG_URL: &str =
+    "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
+const NVD_CVES_API_URL: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
+const AWS_WHATSNEW_FEED_URL: &str = "https://aws.amazon.com/new/feed/";
+const AWS_SECURITY_FEED_URL: &str = "https://aws.amazon.com/security/security-bulletins/rss/feed/";
+const GOOGLE_CLOUD_BLOG_FEED_URL: &str = "https://cloudblog.withgoogle.com/rss";
+const KUBERNETES_FEED_URL: &str = "https://kubernetes.io/feed.xml";
+const CNCF_FEED_URL: &str = "https://www.cncf.io/feed/";
+const INFOQ_FEED_URL: &str = "https://feed.infoq.com/";
+const MARTIN_FOWLER_FEED_URL: &str = "https://martinfowler.com/feed.atom";
+const GITHUB_SEARCH_API_URL: &str = "https://api.github.com/search/repositories";
 const DEFAULT_ARXIV_QUERY: &str = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:stat.ML";
+const DEFAULT_GITHUB_SEARCH_QUERY: &str = "stars:>1000 pushed:>2026-01-01 archived:false";
 
 const TWITTER_FETCH_RULES: &[UrlRule] = &[
     UrlRule::new(&["x.com/", "/status/"]),
@@ -81,6 +109,15 @@ const HACKERNEWS_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["news.ycombinator.co
 const DEVTO_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["dev.to/"])];
 const ZENN_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["zenn.dev/"])];
 const GITHUB_ADVISORY_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["github.com/advisories/"])];
+const NVD_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["nvd.nist.gov/vuln/detail/"])];
+const AWS_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["aws.amazon.com/"])];
+const GOOGLE_CLOUD_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["cloud.google.com/"])];
+const KUBERNETES_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["kubernetes.io/blog/"])];
+const CNCF_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["cncf.io/"])];
+const INFOQ_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["infoq.com/"])];
+const MARTIN_FOWLER_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["martinfowler.com/"])];
+const GITHUB_REPO_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["github.com/"])];
+const THOUGHTWORKS_RADAR_FETCH_RULES: &[UrlRule] = &[UrlRule::new(&["thoughtworks.com/radar"])];
 
 const ARXIV_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["arxiv.org/"])];
 const DOI_SAVE_RULES: &[UrlRule] = &[UrlRule::new(&["doi.org/"])];
@@ -173,6 +210,137 @@ pub const SITES: &[Site] = &[
         recommend: Some(RecommendSource::GitHubAdvisories {
             api_url: GITHUB_ADVISORIES_API_URL,
         }),
+    },
+    Site {
+        name: "cisa-kev",
+        aliases: &["kev", "cisa"],
+        supported_urls: &["https://nvd.nist.gov/vuln/detail/<CVE>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: NVD_FETCH_RULES,
+        save_type: "web",
+        save_rules: NVD_FETCH_RULES,
+        recommend: Some(RecommendSource::CisaKev {
+            catalog_url: CISA_KEV_CATALOG_URL,
+        }),
+    },
+    Site {
+        name: "nvd",
+        aliases: &["cve", "nvd-cve"],
+        supported_urls: &["https://nvd.nist.gov/vuln/detail/<CVE>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: NVD_FETCH_RULES,
+        save_type: "web",
+        save_rules: NVD_FETCH_RULES,
+        recommend: Some(RecommendSource::NvdCves {
+            api_url: NVD_CVES_API_URL,
+        }),
+    },
+    Site {
+        name: "aws-whatsnew",
+        aliases: &["aws-new", "aws"],
+        supported_urls: &["https://aws.amazon.com/about-aws/whats-new/<slug>/"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: AWS_FETCH_RULES,
+        save_type: "web",
+        save_rules: AWS_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: AWS_WHATSNEW_FEED_URL,
+        }),
+    },
+    Site {
+        name: "aws-security",
+        aliases: &["aws-security-bulletins", "aws-sec"],
+        supported_urls: &["https://aws.amazon.com/security/security-bulletins/<slug>/"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: AWS_FETCH_RULES,
+        save_type: "web",
+        save_rules: AWS_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: AWS_SECURITY_FEED_URL,
+        }),
+    },
+    Site {
+        name: "google-cloud-blog",
+        aliases: &["google-cloud", "gcp"],
+        supported_urls: &["https://cloud.google.com/blog/<slug>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: GOOGLE_CLOUD_FETCH_RULES,
+        save_type: "web",
+        save_rules: GOOGLE_CLOUD_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: GOOGLE_CLOUD_BLOG_FEED_URL,
+        }),
+    },
+    Site {
+        name: "kubernetes",
+        aliases: &["k8s", "kubernetes-blog"],
+        supported_urls: &["https://kubernetes.io/blog/<yyyy>/<mm>/<dd>/<slug>/"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: KUBERNETES_FETCH_RULES,
+        save_type: "web",
+        save_rules: KUBERNETES_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: KUBERNETES_FEED_URL,
+        }),
+    },
+    Site {
+        name: "cncf",
+        aliases: &["cloud-native", "cncf-blog"],
+        supported_urls: &["https://www.cncf.io/blog/<yyyy>/<mm>/<dd>/<slug>/"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: CNCF_FETCH_RULES,
+        save_type: "web",
+        save_rules: CNCF_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: CNCF_FEED_URL,
+        }),
+    },
+    Site {
+        name: "infoq",
+        aliases: &["infoq-news", "architecture-news"],
+        supported_urls: &["https://www.infoq.com/<path>/"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: INFOQ_FETCH_RULES,
+        save_type: "web",
+        save_rules: INFOQ_FETCH_RULES,
+        recommend: Some(RecommendSource::RssFeed {
+            feed_url: INFOQ_FEED_URL,
+        }),
+    },
+    Site {
+        name: "martinfowler",
+        aliases: &["fowler", "martin-fowler"],
+        supported_urls: &["https://martinfowler.com/articles/<slug>.html"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: MARTIN_FOWLER_FETCH_RULES,
+        save_type: "web",
+        save_rules: MARTIN_FOWLER_FETCH_RULES,
+        recommend: Some(RecommendSource::AtomFeed {
+            feed_url: MARTIN_FOWLER_FEED_URL,
+        }),
+    },
+    Site {
+        name: "github-search",
+        aliases: &["github-repos", "oss-trends"],
+        supported_urls: &["https://github.com/<owner>/<repo>"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: GITHUB_REPO_FETCH_RULES,
+        save_type: "web",
+        save_rules: GITHUB_REPO_FETCH_RULES,
+        recommend: Some(RecommendSource::GitHubSearch {
+            api_url: GITHUB_SEARCH_API_URL,
+            default_query: DEFAULT_GITHUB_SEARCH_QUERY,
+        }),
+    },
+    Site {
+        name: "thoughtworks-radar",
+        aliases: &["technology-radar", "tw-radar"],
+        supported_urls: &["https://www.thoughtworks.com/radar"],
+        fetch_route: FetchRoute::Generic,
+        fetch_rules: THOUGHTWORKS_RADAR_FETCH_RULES,
+        save_type: "web",
+        save_rules: THOUGHTWORKS_RADAR_FETCH_RULES,
+        recommend: None,
     },
     Site {
         name: "doi",
@@ -284,6 +452,47 @@ mod tests {
         assert!(supported_url_examples().contains(&"https://github.com/advisories/<ghsa-id>"));
     }
 
+    #[test]
+    fn resolves_cto_recommend_source_aliases() {
+        let cases = [
+            ("cisa-kev", &["kev", "cisa"][..]),
+            ("nvd", &["cve", "nvd-cve"][..]),
+            ("aws-whatsnew", &["aws-new", "aws"][..]),
+            ("aws-security", &["aws-security-bulletins", "aws-sec"][..]),
+            ("google-cloud-blog", &["google-cloud", "gcp"][..]),
+            ("kubernetes", &["k8s", "kubernetes-blog"][..]),
+            ("cncf", &["cloud-native", "cncf-blog"][..]),
+            ("infoq", &["infoq-news", "architecture-news"][..]),
+            ("martinfowler", &["fowler", "martin-fowler"][..]),
+            ("github-search", &["github-repos", "oss-trends"][..]),
+        ];
+
+        let recommendable = recommendable_site_names();
+
+        for (name, aliases) in cases {
+            let site = site_by_name(name).unwrap();
+            assert_eq!(site.name, name);
+            assert!(
+                recommendable.contains(&name),
+                "{name} should be recommend-enabled"
+            );
+            for alias in aliases {
+                assert_eq!(site_by_name(alias).unwrap().name, name);
+            }
+            assert!(site.recommend.is_some(), "{name} should have a source");
+        }
+    }
+
+    #[test]
+    fn registers_thoughtworks_radar_as_manual_fallback_only() {
+        let site = site_by_name("thoughtworks-radar").unwrap();
+        assert_eq!(site_by_name("technology-radar").unwrap().name, site.name);
+        assert_eq!(site_by_name("tw-radar").unwrap().name, site.name);
+        assert!(site.recommend.is_none());
+        assert!(!recommendable_site_names().contains(&"thoughtworks-radar"));
+        assert!(supported_url_examples().contains(&"https://www.thoughtworks.com/radar"));
+    }
+
     /// 検証: fetch route は site registry の URL rule から決まる
     /// 理由: サイト別 fetch 分岐を fetch.rs に散らさない
     /// リスク: 新しい site 追加時に複数ファイルを更新し忘れる
@@ -361,7 +570,23 @@ mod tests {
     fn lists_recommendable_site_names() {
         assert_eq!(
             recommendable_site_names(),
-            vec!["hackernews", "devto", "zenn", "arxiv", "github-advisory"]
+            vec![
+                "hackernews",
+                "devto",
+                "zenn",
+                "arxiv",
+                "github-advisory",
+                "cisa-kev",
+                "nvd",
+                "aws-whatsnew",
+                "aws-security",
+                "google-cloud-blog",
+                "kubernetes",
+                "cncf",
+                "infoq",
+                "martinfowler",
+                "github-search"
+            ]
         );
     }
 
@@ -371,12 +596,14 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 5);
+        assert_eq!(sites.len(), 15);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
         assert_eq!(sites[2].name, "zenn");
         assert_eq!(sites[3].name, "arxiv");
         assert_eq!(sites[4].name, "github-advisory");
+        assert_eq!(sites[5].name, "cisa-kev");
+        assert_eq!(sites[14].name, "github-search");
         assert!(sites.iter().all(|site| site.recommend.is_some()));
     }
 
