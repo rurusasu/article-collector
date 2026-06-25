@@ -1,8 +1,27 @@
-# CLAUDE.md
+# AGENTS.md
 
-## 共通エージェントルール
+## 実装計画と Plane issue 管理
 
-プロジェクト共通のルールは `AGENTS.md` を参照し、必ず従うこと。特に、実装計画を立てた場合は、実装開始前に Plane issue/sub-issue へ計画を記載し、完了時に status を更新すること。
+実装計画を立てた場合は、コード編集・実装・PR 作成を始める前に、必ず Plane に対応する issue を作成または更新すること。
+
+### 必須手順
+
+1. 既存 issue がある場合は、その issue に実装計画を反映する
+2. 既存 issue がない場合は、新規 issue を作成する
+3. 実装計画の作業単位が複数ある場合は、Plane の sub-issue または checklist 相当の粒度で分解する
+4. issue には目的、実装範囲、受け入れ条件、検証コマンド、必要な release/cleanup 作業を記載する
+5. Plane への記載が完了してから実装に着手する
+6. 作業完了後は、該当 issue/sub-issue の status を実態に合わせて更新する
+
+### 禁止事項
+
+- 実装計画を立てたのに Plane へ記載しないまま実装を開始することは**禁止**
+- Plane issue の status を未更新のまま「完了」と報告することは**禁止**
+- release、branch cleanup、verification が必要な作業を issue から漏らすことは**禁止**
+
+### 例外
+
+ユーザーが明示的に「Plane への記載不要」「issue を作らない」などと指示した場合のみ例外とする。その場合でも、最終報告で Plane 更新を省略した理由を明記すること。
 
 ## PR チェックリスト検証ルール
 
