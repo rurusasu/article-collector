@@ -23,6 +23,22 @@
 
 ユーザーが明示的に「Plane への記載不要」「issue を作らない」などと指示した場合のみ例外とする。その場合でも、最終報告で Plane 更新を省略した理由を明記すること。
 
+### Plane 更新経路
+
+- UI は `http://localhost:8080/god-mode/`。ただしブラウザ経由はログインが必要なため、ログイン状態を前提にしない
+- 実際の確認・更新は Docker の Plane API コンテナから Django ORM で行う
+- shell 起動: `docker exec plane-app-api-1 python manage.py shell`
+- ACS project の issue 取得例:
+
+```python
+from plane.db.models import Issue
+
+issue = Issue.objects.get(sequence_id=26, project__identifier="ACS")
+```
+
+- sub-issue は `Issue.objects.filter(parent=issue)` で確認する
+- status 更新は該当 `State` を取得して `issue.state = state; issue.save()` で実施し、完了報告前に実態と一致させる
+
 ## PR チェックリスト検証ルール
 
 PR レビューの Step 3（チェックリスト検証）では、以下のプロセスを**必ず**実行すること。
