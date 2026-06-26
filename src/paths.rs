@@ -4,7 +4,7 @@ pub const TEMP_DIR_ENV: &str = "ARTICLE_COLLECTOR_TEMP_DIR";
 pub const OUTPUT_DIR_ENV: &str = "ARTICLE_COLLECTOR_OUTPUT_DIR";
 
 pub fn temp_dir() -> PathBuf {
-    if let Some(path) = env_path(TEMP_DIR_ENV) {
+    if let Some(path) = temp_dir_from_env() {
         return path;
     }
 
@@ -13,6 +13,10 @@ pub fn temp_dir() -> PathBuf {
     } else {
         PathBuf::from("/tmp/collect")
     }
+}
+
+pub fn temp_dir_from_env() -> Option<PathBuf> {
+    env_path(TEMP_DIR_ENV)
 }
 
 pub fn raw_json_path() -> PathBuf {
