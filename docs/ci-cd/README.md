@@ -40,15 +40,7 @@ graph TB
 通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
 Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、`gh release create` で tag と GitHub Release を作成する。その後、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
 
-`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、今後は `v0.7.0` のような形式を使う。
-
-既存 release-please 時代の tag は `article-collector-v0.6.1` 形式だったため、移行時は一度だけ `v0.6.1` の baseline tag を既存 `article-collector-v0.6.1` と同じ commit に作成してから release-plz の Release PR 判定に移行する。これを行わないと、release-plz は git-only mode で既存 release を見つけられず、初回 release 判定が過去履歴全体に広がる。
-
-```bash
-git fetch origin --tags
-git tag v0.6.1 article-collector-v0.6.1
-git push origin v0.6.1
-```
+`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v0.7.0` のような形式を使う。
 
 | Asset | Target |
 |-------|--------|
