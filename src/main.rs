@@ -68,6 +68,21 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
+    /// recommend history を管理
+    History {
+        #[command(subcommand)]
+        command: HistoryCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommands {
+    /// SQLite recommend history を clear
+    Clear {
+        /// article-collector TOML config のパス
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -136,6 +151,18 @@ async fn main() -> Result<()> {
                 let pr_body = recommend_pr_body(&saved_articles);
                 target_repos::create_pr_for_paths(&saved_paths, &pr_title, &pr_title, &pr_body)?;
             }
+        }
+        Commands::History {
+            command: HistoryCommands::Clear { ref config },
+        } => {
+            let app_config = config::load(config.as_deref())?;
+            let history_path = recommend::history_path_for_config(&app_config.recommend)?;
+            let mut history = recommend_history::RecommendationHistory::open(&history_path)?;
+            let cleared = history.clear_seen_items()?;
+            eprintln!(
+                "Cleared {cleared} recommend history item(s) from {}",
+                history_path.display()
+            );
         }
     }
 
