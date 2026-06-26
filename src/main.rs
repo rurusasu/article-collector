@@ -1,3 +1,4 @@
+mod cleanup;
 mod config;
 mod discovery;
 mod fetch;
@@ -14,7 +15,7 @@ mod translate;
 mod youtube;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -78,12 +79,21 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum HistoryCommands {
-    /// SQLite recommend history を clear
+    /// recommend history と実行時 artifact を clear
     Clear {
+        /// clear 対象
+        #[arg(value_enum)]
+        scope: Option<HistoryClearScope>,
         /// article-collector TOML config のパス
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+enum HistoryClearScope {
+    /// recommend history、env 指定 temp dir、env 指定 output dir を clear
+    All,
 }
 
 #[tokio::main]
@@ -159,16 +169,35 @@ async fn main() -> Result<()> {
             }
         }
         Commands::History {
-            command: HistoryCommands::Clear { ref config },
+            command: HistoryCommands::Clear { scope, ref config },
         } => {
             let app_config = config::load(config.as_deref())?;
             let history_path = recommend::history_path_for_config(&app_config.recommend)?;
-            let mut history = recommend_history::RecommendationHistory::open(&history_path)?;
-            let cleared = history.clear_seen_items()?;
+            let cleared = {
+                let mut history = recommend_history::RecommendationHistory::open(&history_path)?;
+                history.clear_seen_items()?
+            };
             eprintln!(
                 "Cleared {cleared} recommend history item(s) from {}",
                 history_path.display()
             );
+            if matches!(scope, Some(HistoryClearScope::All)) {
+                let cleanup_summary = cleanup::clear_all_artifacts()?;
+                if let Some(path) = cleanup_summary.removed_temp_dir {
+                    eprintln!(
+                        "Removed {} directory {}",
+                        paths::TEMP_DIR_ENV,
+                        path.display()
+                    );
+                }
+                if let Some(path) = cleanup_summary.removed_output_dir {
+                    eprintln!(
+                        "Removed {} directory {}",
+                        paths::OUTPUT_DIR_ENV,
+                        path.display()
+                    );
+                }
+            }
         }
     }
 
