@@ -8,13 +8,20 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::config::{RecommendConfig, RecommendSourceConfig};
+use crate::config::{RecommendConfig, RecommendSiteConfig};
+use crate::discovery::planner;
+use crate::discovery::types::{ArticleCandidate, DiscoveryEndpoint};
 use crate::fetch;
 use crate::paths;
-use crate::recommend_artifacts;
-use crate::recommend_history::{default_history_path, RecommendationHistory};
-use crate::sites::{self, RecommendSource, Site};
-use crate::translate;
+use crate::pipeline::{
+    artifacts as recommend_artifacts,
+    history::{default_history_path, RecommendationHistory},
+    translation as translate,
+};
+use crate::sites::{
+    self,
+    types::{CatalogRequest, JsonRequest, SearchRequest, Site},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 struct LinkCandidate {
@@ -57,7 +64,7 @@ enum RecommendationTarget<'a> {
     AllSources,
     Source {
         site_name: &'static str,
-        source: RecommendSource,
+        endpoint: DiscoveryEndpoint,
     },
     PageLinks {
         url: &'a str,
@@ -72,7 +79,7 @@ const USER_AGENT: &str = concat!("article-collector/", env!("CARGO_PKG_VERSION")
 #[derive(Debug)]
 struct SourcePlan {
     site_name: &'static str,
-    source: RecommendSource,
+    endpoint: DiscoveryEndpoint,
     limit: usize,
     query: Option<String>,
 }
@@ -106,11 +113,14 @@ pub async fn collect_recommended(
             reject_query_override(query)?;
             collect_all_sources(limit, config).await?
         }
-        RecommendationTarget::Source { site_name, source } => {
-            let plan = source_plan_for_parts(site_name, source, limit, query, config)?;
+        RecommendationTarget::Source {
+            site_name,
+            endpoint,
+        } => {
+            let plan = source_plan_for_parts(site_name, endpoint, limit, query, config)?;
             collect_source(
                 plan.site_name,
-                plan.source,
+                plan.endpoint,
                 plan.limit,
                 plan.query.as_deref(),
             )
@@ -171,7 +181,7 @@ pub async fn collect_recommended(
 
 fn resolve_recommendation_target(target: &str) -> Result<RecommendationTarget<'_>> {
     if is_all_target(target) {
-        if sites::recommendable_sites().is_empty() {
+        if planner::recommendable_sites().is_empty() {
             bail!("No recommendation sources configured");
         }
         return Ok(RecommendationTarget::AllSources);
@@ -179,14 +189,14 @@ fn resolve_recommendation_target(target: &str) -> Result<RecommendationTarget<'_
 
     if let Some(site) = sites::site_by_name(target) {
         return site
-            .recommend
-            .map(|source| RecommendationTarget::Source {
+            .discovery
+            .map(|endpoint| RecommendationTarget::Source {
                 site_name: site.name,
-                source,
+                endpoint,
             })
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "No recommendation source configured for site '{}'. Use one of: {}, {}",
+                    "No discovery endpoint configured for site '{}'. Use one of: {}, {}",
                     site.name,
                     ALL_TARGET,
                     sites::recommendable_site_names().join(", ")
@@ -203,13 +213,16 @@ fn resolve_recommendation_target(target: &str) -> Result<RecommendationTarget<'_
         );
     }
 
-    if let Some(source) = sites::recommend_source_for_url(target) {
+    if let Some(endpoint) = planner::endpoint_for_url(target) {
         let site_name = sites::SITES
             .iter()
-            .find(|site| site.recommend == Some(source))
+            .find(|site| site.discovery.as_ref() == Some(endpoint))
             .map(|site| site.name)
             .unwrap_or("unknown");
-        Ok(RecommendationTarget::Source { site_name, source })
+        Ok(RecommendationTarget::Source {
+            site_name,
+            endpoint: *endpoint,
+        })
     } else {
         Ok(RecommendationTarget::PageLinks { url: target })
     }
@@ -285,8 +298,9 @@ async fn collect_recommended_articles(
             .unwrap_or("Untitled")
             .to_string();
         let source = item
-            .get("source")
+            .get("site")
             .and_then(Value::as_str)
+            .or_else(|| item.get("source").and_then(Value::as_str))
             .unwrap_or("recommend");
         let stem = recommend_artifacts::article_file_stem(index + 1, source, &title, &mut used);
 
@@ -1738,7 +1752,7 @@ async fn collect_all_sources(limit: Option<usize>, config: &RecommendConfig) -> 
     for plan in source_plans {
         let mut site_items = collect_source(
             plan.site_name,
-            plan.source,
+            plan.endpoint,
             plan.limit,
             plan.query.as_deref(),
         )
@@ -1781,7 +1795,7 @@ fn source_plans_for_all(
 
 fn configured_recommendable_sites(config: &RecommendConfig) -> Result<Vec<&'static Site>> {
     let Some(source_names) = config.sources.as_ref().filter(|names| !names.is_empty()) else {
-        return Ok(sites::recommendable_sites());
+        return Ok(planner::recommendable_sites());
     };
 
     source_names
@@ -1789,9 +1803,9 @@ fn configured_recommendable_sites(config: &RecommendConfig) -> Result<Vec<&'stat
         .map(|name| {
             let site = sites::site_by_name(name)
                 .with_context(|| format!("Unknown recommendation source in config: {name}"))?;
-            site.recommend
+            planner::endpoint_for_site(site)
                 .map(|_| site)
-                .with_context(|| format!("No recommendation source configured for site '{name}'"))
+                .with_context(|| format!("No discovery endpoint configured for site '{name}'"))
         })
         .collect()
 }
@@ -1802,15 +1816,14 @@ fn source_plan_for_site(
     cli_query: Option<&str>,
     config: &RecommendConfig,
 ) -> Result<SourcePlan> {
-    let source = site
-        .recommend
-        .context("recommendable site must have a recommend source")?;
-    source_plan_for_parts(site.name, source, cli_limit, cli_query, config)
+    let endpoint = planner::endpoint_for_site(site)
+        .context("recommendable site must have a discovery endpoint")?;
+    source_plan_for_parts(site.name, endpoint, cli_limit, cli_query, config)
 }
 
 fn source_plan_for_parts(
     site_name: &'static str,
-    source: RecommendSource,
+    endpoint: DiscoveryEndpoint,
     cli_limit: Option<usize>,
     cli_query: Option<&str>,
     config: &RecommendConfig,
@@ -1822,31 +1835,21 @@ fn source_plan_for_parts(
         cli_limit,
         config.limit,
         source_limit,
-        default_limit_for_source(source),
+        endpoint.default_limit(),
     )?;
 
     Ok(SourcePlan {
         site_name,
-        source,
+        endpoint,
         limit,
         query,
     })
 }
 
-fn default_limit_for_source(source: RecommendSource) -> Option<usize> {
-    match source {
-        RecommendSource::CisaKev { .. }
-        | RecommendSource::NvdCves { .. }
-        | RecommendSource::GitHubAdvisories { .. }
-        | RecommendSource::GitHubSearch { .. } => Some(10),
-        _ => None,
-    }
-}
-
 fn source_config_for<'a>(
     site_name: &str,
     config: &'a RecommendConfig,
-) -> Option<&'a RecommendSourceConfig> {
+) -> Option<&'a RecommendSiteConfig> {
     config.source.get(site_name)
 }
 
@@ -1875,7 +1878,7 @@ fn effective_source_limit(
 
 fn effective_query(
     cli_query: Option<&str>,
-    source_config: Option<&RecommendSourceConfig>,
+    source_config: Option<&RecommendSiteConfig>,
 ) -> Option<String> {
     cli_query
         .filter(|query| !query.trim().is_empty())
@@ -1890,62 +1893,82 @@ fn effective_query(
 
 async fn collect_source(
     site_name: &'static str,
-    source: RecommendSource,
+    endpoint: DiscoveryEndpoint,
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let mut items = match source {
-        RecommendSource::HackerNewsTopStories { api_url } => {
-            reject_query_override(query)?;
-            collect_hackernews_topstories(api_url, limit).await?
+    if !endpoint.supports_query() {
+        reject_query_override(query)?;
+    }
+
+    let mut items = match endpoint {
+        DiscoveryEndpoint::JsonApi {
+            api_url,
+            request: JsonRequest::FollowUpIds { .. },
+        } => collect_hackernews_topstories(api_url, limit).await?,
+        DiscoveryEndpoint::JsonApi {
+            api_url,
+            request: JsonRequest::PaginatedPerPage,
+        } if site_name == "devto" => collect_devto_articles(api_url, limit).await?,
+        DiscoveryEndpoint::JsonApi {
+            api_url,
+            request: JsonRequest::PaginatedPerPage,
+        } if site_name == "github-advisory" => collect_github_advisories(api_url, limit).await?,
+        DiscoveryEndpoint::JsonApi { .. } => {
+            bail!("No JSON API discovery collector registered for site '{site_name}'")
         }
-        RecommendSource::DevToArticles { api_url } => {
-            reject_query_override(query)?;
-            collect_devto_articles(api_url, limit).await?
-        }
-        RecommendSource::ZennFeed { feed_url } => {
-            reject_query_override(query)?;
+        DiscoveryEndpoint::RssFeed { feed_url } if site_name == "zenn" => {
             collect_zenn_feed(feed_url, limit).await?
         }
-        RecommendSource::ArxivSearch {
+        DiscoveryEndpoint::RssFeed { feed_url } => {
+            collect_rss_feed(feed_url, site_name, limit).await?
+        }
+        DiscoveryEndpoint::SearchApi {
             api_url,
             default_query,
+            request: SearchRequest::ArxivSearch,
         } => {
             collect_arxiv_search(
                 api_url,
-                query_override_or_default(query, default_query),
+                query_override_or_default(query, required_default_query(site_name, default_query)?),
                 limit,
             )
             .await?
         }
-        RecommendSource::GitHubAdvisories { api_url } => {
-            reject_query_override(query)?;
-            collect_github_advisories(api_url, limit).await?
-        }
-        RecommendSource::CisaKev { catalog_url } => {
-            reject_query_override(query)?;
-            collect_cisa_kev(catalog_url, limit).await?
-        }
-        RecommendSource::NvdCves { api_url } => collect_nvd_cves(api_url, query, limit).await?,
-        RecommendSource::RssFeed { feed_url } => {
-            reject_query_override(query)?;
-            collect_rss_feed(feed_url, site_name, limit).await?
-        }
-        RecommendSource::AtomFeed { feed_url } => {
-            reject_query_override(query)?;
-            collect_atom_feed(feed_url, site_name, limit).await?
-        }
-        RecommendSource::GitHubSearch {
+        DiscoveryEndpoint::SearchApi {
+            api_url,
+            request:
+                SearchRequest::QueryParam {
+                    name: "keywordSearch",
+                },
+            ..
+        } => collect_nvd_cves(api_url, query, limit).await?,
+        DiscoveryEndpoint::SearchApi {
             api_url,
             default_query,
+            request: SearchRequest::QueryParam { name: "q" },
         } => {
             collect_github_search_repositories(
                 api_url,
-                query_override_or_default(query, default_query),
+                query_override_or_default(query, required_default_query(site_name, default_query)?),
                 limit,
             )
             .await?
         }
+        DiscoveryEndpoint::SearchApi { .. } => {
+            bail!("No search API discovery collector registered for site '{site_name}'")
+        }
+        DiscoveryEndpoint::CatalogApi {
+            catalog_url,
+            request: CatalogRequest::VulnerabilityCatalog,
+        } => collect_cisa_kev(catalog_url, limit).await?,
+        DiscoveryEndpoint::CatalogApi { .. } => {
+            bail!("No catalog discovery collector registered for site '{site_name}'")
+        }
+        DiscoveryEndpoint::AtomFeed { feed_url } => {
+            collect_atom_feed(feed_url, site_name, limit).await?
+        }
+        DiscoveryEndpoint::PageLinks => bail!("Page link discovery requires an input URL"),
     };
 
     for item in &mut items {
@@ -1963,10 +1986,17 @@ fn query_override_or_default<'a>(query: Option<&'a str>, default_query: &'a str)
         .unwrap_or(default_query)
 }
 
+fn required_default_query(
+    site_name: &str,
+    default_query: Option<&'static str>,
+) -> Result<&'static str> {
+    default_query.with_context(|| format!("Search API site '{site_name}' has no default query"))
+}
+
 async fn collect_page_links(
     url: &str,
-    source_name: &str,
-    site_name: Option<&str>,
+    source_name: &'static str,
+    site_name: Option<&'static str>,
     limit: usize,
 ) -> Result<Vec<Value>> {
     let base = Url::parse(url).context("Invalid URL")?;
@@ -1993,20 +2023,20 @@ async fn collect_page_links(
                 "Title: {}\nURL: {}\nSource page: {}",
                 link.title, link.url, url
             );
-            json!({
-                "rank": rank,
-                "source": source_name,
-                "title": link.title,
-                "url": link.url,
-                "source_url": url,
-                "content": content
-            })
-        })
-        .map(|mut item| {
-            if let (Some(site_name), Some(object)) = (site_name, item.as_object_mut()) {
-                object.insert("site".to_string(), json!(site_name));
+            let mut metadata = serde_json::Map::new();
+            metadata.insert("source_url".to_string(), json!(url));
+            if site_name.is_none() {
+                metadata.insert("source".to_string(), json!(source_name));
             }
-            item
+            ArticleCandidate {
+                site: site_name.unwrap_or(source_name),
+                title: link.title,
+                url: link.url,
+                rank: Some(rank),
+                content_hint: Some(content),
+                metadata,
+            }
+            .into_value()
         })
         .collect())
 }
@@ -2059,7 +2089,7 @@ fn normalize_link_text(text: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{RecommendConfig, RecommendSourceConfig};
+    use crate::config::{RecommendConfig, RecommendSiteConfig};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
@@ -2070,7 +2100,11 @@ mod tests {
     fn resolves_hackernews_site_name_as_topstories() {
         let RecommendationTarget::Source {
             site_name,
-            source: RecommendSource::HackerNewsTopStories { .. },
+            endpoint:
+                DiscoveryEndpoint::JsonApi {
+                    request: JsonRequest::FollowUpIds { .. },
+                    ..
+                },
         } = resolve_recommendation_target("hackernews").unwrap()
         else {
             panic!("hackernews should resolve to HN topstories");
@@ -2085,7 +2119,11 @@ mod tests {
     fn resolves_hackernews_url_as_topstories() {
         let RecommendationTarget::Source {
             site_name,
-            source: RecommendSource::HackerNewsTopStories { .. },
+            endpoint:
+                DiscoveryEndpoint::JsonApi {
+                    request: JsonRequest::FollowUpIds { .. },
+                    ..
+                },
         } = resolve_recommendation_target("https://news.ycombinator.com/item?id=123").unwrap()
         else {
             panic!("HN URL should resolve to HN topstories");
@@ -2100,7 +2138,11 @@ mod tests {
     fn resolves_devto_site_name_to_articles_api() {
         let RecommendationTarget::Source {
             site_name,
-            source: RecommendSource::DevToArticles { api_url },
+            endpoint:
+                DiscoveryEndpoint::JsonApi {
+                    api_url,
+                    request: JsonRequest::PaginatedPerPage,
+                },
         } = resolve_recommendation_target("devto").unwrap()
         else {
             panic!("devto should resolve to Dev.to articles");
@@ -2116,7 +2158,7 @@ mod tests {
     fn resolves_zenn_site_name_to_feed() {
         let RecommendationTarget::Source {
             site_name,
-            source: RecommendSource::ZennFeed { feed_url },
+            endpoint: DiscoveryEndpoint::RssFeed { feed_url },
         } = resolve_recommendation_target("zenn").unwrap()
         else {
             panic!("zenn should resolve to Zenn feed");
@@ -2132,10 +2174,11 @@ mod tests {
     fn resolves_arxiv_site_name_to_default_search() {
         let RecommendationTarget::Source {
             site_name,
-            source:
-                RecommendSource::ArxivSearch {
+            endpoint:
+                DiscoveryEndpoint::SearchApi {
                     api_url,
                     default_query,
+                    request: SearchRequest::ArxivSearch,
                 },
         } = resolve_recommendation_target("arxiv").unwrap()
         else {
@@ -2143,6 +2186,7 @@ mod tests {
         };
         assert_eq!(site_name, "arxiv");
         assert_eq!(api_url, "https://export.arxiv.org/api/query");
+        let default_query = default_query.unwrap();
         assert!(default_query.contains("cat:cs.CV"));
         assert!(default_query.contains("cat:cs.LG"));
         assert!(default_query.contains("stat.ML"));
@@ -2152,7 +2196,11 @@ mod tests {
     fn resolves_github_advisory_site_name_to_api() {
         let RecommendationTarget::Source {
             site_name,
-            source: RecommendSource::GitHubAdvisories { api_url },
+            endpoint:
+                DiscoveryEndpoint::JsonApi {
+                    api_url,
+                    request: JsonRequest::PaginatedPerPage,
+                },
         } = resolve_recommendation_target("github-advisory").unwrap()
         else {
             panic!("github-advisory should resolve to GitHub Advisory API");
@@ -2358,7 +2406,7 @@ mod tests {
             sources: Some(vec!["arxiv".to_string()]),
             source: BTreeMap::from([(
                 "arxiv".to_string(),
-                RecommendSourceConfig {
+                RecommendSiteConfig {
                     limit: Some(10),
                     query: Some("cat:cs.IR OR cat:cs.SE".to_string()),
                     ..Default::default()
@@ -2388,7 +2436,7 @@ mod tests {
             ]),
             source: BTreeMap::from([(
                 "devto".to_string(),
-                RecommendSourceConfig {
+                RecommendSiteConfig {
                     enabled: Some(false),
                     ..Default::default()
                 },
@@ -2411,7 +2459,7 @@ mod tests {
             limit: Some(30),
             source: BTreeMap::from([(
                 "arxiv".to_string(),
-                RecommendSourceConfig {
+                RecommendSiteConfig {
                     limit: Some(10),
                     query: Some("cat:cs.IR".to_string()),
                     ..Default::default()

@@ -7,7 +7,7 @@
 | ファイル | 要約 | 使う場面 |
 | --- | --- | --- |
 | [architectures/files.md](architectures/files.md) | サイト固有 code を `sites/` に、機構別 code を `discovery/` / `fetch/` に置く file/module 構成規約。 | fetch/discovery の file/module 構成を確認するとき。 |
-| [architectures/enums.md](architectures/enums.md) | `Site`、機構別 `DiscoveryEndpoint`、機構別 `FetchRoute`、`SaveType`、`ArticleCandidate` の理想的な enum/type model。 | `RecommendSource` の rename、endpoint behavior の変更、typed save category の追加を行うとき。 |
+| [architectures/enums.md](architectures/enums.md) | `Site`、機構別 `DiscoveryEndpoint`、機構別 `FetchRoute`、`SaveType`、`ArticleCandidate` の理想的な enum/type model。 | discovery endpoint、fetch route、typed save category を変更するとき。 |
 | [architectures/usage.md](architectures/usage.md) | docs と実装 module のつながり、所有側と利用側、実行時の流れ。 | file 間の関係、pipeline の順序、site 固有処理の流し方を確認するとき。 |
 
 ## サイトドキュメント一覧
