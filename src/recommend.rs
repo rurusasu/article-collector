@@ -4,6 +4,7 @@ use quick_xml::reader::Reader;
 use reqwest::Url;
 use scraper::{Html, Selector};
 use serde_json::{json, Value};
+use slog::{info, warn, Logger};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -99,19 +100,21 @@ pub struct RecommendationCollection {
     pub translated_articles: Vec<TranslatedRecommendedArticle>,
 }
 
-pub async fn collect_recommended(
+pub async fn collect_recommended_with_logger(
     target: &str,
     limit: Option<usize>,
     query: Option<&str>,
     config: &RecommendConfig,
+    logger: &Logger,
 ) -> Result<RecommendationCollection> {
     validate_create_pr_config(config)?;
     let recommendation_target = resolve_recommendation_target(target)?;
+    let is_all_sources = matches!(&recommendation_target, RecommendationTarget::AllSources);
     let translation_required = recommendation_target.translation_required();
     let mut items = match recommendation_target {
         RecommendationTarget::AllSources => {
             reject_query_override(query)?;
-            collect_all_sources(limit, config).await?
+            collect_all_sources_with_logger(limit, config, logger).await?
         }
         RecommendationTarget::Source {
             site_name,
@@ -143,6 +146,9 @@ pub async fn collect_recommended(
     items = dedup_outcome.items;
 
     ensure_new_recommendations(target, &items)?;
+    if is_all_sources {
+        log_source_counts_summary(logger, "recommend_new_items_by_source", &items);
+    }
 
     if config.fetch_articles {
         return collect_recommended_articles(
@@ -1745,12 +1751,19 @@ fn normalize_arxiv_url(url: &str) -> String {
         .unwrap_or_else(|| url.trim().to_string())
 }
 
-async fn collect_all_sources(limit: Option<usize>, config: &RecommendConfig) -> Result<Vec<Value>> {
+async fn collect_all_sources_with_logger(
+    limit: Option<usize>,
+    config: &RecommendConfig,
+    logger: &Logger,
+) -> Result<Vec<Value>> {
     let source_plans = source_plans_for_all(limit, config)?;
     let mut items = Vec::new();
+    let mut failures = Vec::new();
 
+    info!(logger, "recommend_all_start"; "source_count" => source_plans.len());
     for plan in source_plans {
-        let mut site_items = collect_source(
+        log_source_collection_start(logger, &plan);
+        let result = collect_source(
             plan.site_name,
             plan.endpoint,
             plan.limit,
@@ -1762,18 +1775,172 @@ async fn collect_all_sources(limit: Option<usize>, config: &RecommendConfig) -> 
                 "Failed to collect recommended articles for site '{}'",
                 plan.site_name
             )
-        })?;
-        if site_items.is_empty() {
-            bail!(
+        });
+        handle_source_collection_result(logger, &plan, result, &mut items, &mut failures);
+    }
+
+    if !failures.is_empty() {
+        log_source_failures_summary(logger, &failures);
+    }
+    log_source_counts_summary(logger, "recommend_all_candidate_counts_by_source", &items);
+    Ok(items)
+}
+
+fn log_source_collection_start(logger: &Logger, plan: &SourcePlan) {
+    match plan
+        .query
+        .as_deref()
+        .filter(|query| !query.trim().is_empty())
+    {
+        Some(query) => {
+            info!(
+                logger,
+                "recommend_source_start";
+                "source" => plan.site_name,
+                "limit" => plan.limit,
+                "query" => query,
+            );
+        }
+        None => {
+            info!(
+                logger,
+                "recommend_source_start";
+                "source" => plan.site_name,
+                "limit" => plan.limit,
+            );
+        }
+    }
+}
+
+fn log_source_collection_complete(
+    logger: &Logger,
+    plan: &SourcePlan,
+    item_count: usize,
+    total_count: usize,
+) {
+    info!(
+        logger,
+        "recommend_source_complete";
+        "source" => plan.site_name,
+        "item_count" => item_count,
+        "total_item_count" => total_count,
+    );
+}
+
+fn log_source_collection_failed(logger: &Logger, plan: &SourcePlan, error: &str) {
+    match plan
+        .query
+        .as_deref()
+        .filter(|query| !query.trim().is_empty())
+    {
+        Some(query) => {
+            warn!(
+                logger,
+                "recommend_source_failed";
+                "source" => plan.site_name,
+                "limit" => plan.limit,
+                "query" => query,
+                "error" => error,
+            );
+        }
+        None => {
+            warn!(
+                logger,
+                "recommend_source_failed";
+                "source" => plan.site_name,
+                "limit" => plan.limit,
+                "error" => error,
+            );
+        }
+    }
+}
+
+fn log_source_failures_summary(logger: &Logger, failures: &[String]) {
+    warn!(
+        logger,
+        "recommend_all_source_failures";
+        "failure_count" => failures.len(),
+        "failures" => failures.join("; "),
+    );
+}
+
+fn handle_source_collection_result(
+    logger: &Logger,
+    plan: &SourcePlan,
+    result: Result<Vec<Value>>,
+    items: &mut Vec<Value>,
+    failures: &mut Vec<String>,
+) {
+    match result {
+        Ok(mut site_items) if !site_items.is_empty() => {
+            let source_item_count = site_items.len();
+            let total_count = items.len() + source_item_count;
+            log_source_collection_complete(logger, plan, source_item_count, total_count);
+            items.append(&mut site_items);
+        }
+        Ok(_) => {
+            let error = format!(
                 "No recommended articles found for site '{}'",
                 plan.site_name
             );
+            log_source_collection_failed(logger, plan, &error);
+            failures.push(format!("{}: {}", plan.site_name, error));
         }
+        Err(error) => {
+            let error = format!("{error:#}");
+            log_source_collection_failed(logger, plan, &error);
+            failures.push(format!("{}: {}", plan.site_name, error));
+        }
+    }
+}
 
-        items.append(&mut site_items);
+fn log_source_counts_summary(logger: &Logger, message: &'static str, items: &[Value]) {
+    let counts = source_counts_for_items(items);
+    let source_count = counts.len();
+    let source_counts = format_source_counts(&counts);
+    info!(
+        logger,
+        "{}", message;
+        "source_counts" => source_counts,
+        "source_count" => source_count,
+        "item_count" => items.len(),
+    );
+}
+
+fn format_source_counts(counts: &[(String, usize)]) -> String {
+    if counts.is_empty() {
+        return "none".to_string();
     }
 
-    Ok(items)
+    counts
+        .iter()
+        .map(|(source, count)| format!("{source}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn source_counts_for_items(items: &[Value]) -> Vec<(String, usize)> {
+    let mut indexes: HashMap<String, usize> = HashMap::new();
+    let mut counts: Vec<(String, usize)> = Vec::new();
+
+    for item in items {
+        let source = item
+            .get("site")
+            .or_else(|| item.get("source"))
+            .and_then(Value::as_str)
+            .filter(|source| !source.trim().is_empty())
+            .unwrap_or("unknown")
+            .to_string();
+
+        if let Some(index) = indexes.get(&source).copied() {
+            counts[index].1 += 1;
+        } else {
+            indexes.insert(source.clone(), counts.len());
+            counts.push((source, 1));
+        }
+    }
+
+    counts
 }
 
 fn source_plans_for_all(
@@ -2090,8 +2257,63 @@ fn normalize_link_text(text: String) -> String {
 mod tests {
     use super::*;
     use crate::config::{RecommendConfig, RecommendSiteConfig};
+    use slog::{Drain, KV};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct CapturedLog {
+        message: String,
+        fields: BTreeMap<String, String>,
+    }
+
+    #[derive(Clone, Default)]
+    struct CapturingDrain {
+        logs: Arc<Mutex<Vec<CapturedLog>>>,
+    }
+
+    impl slog::Drain for CapturingDrain {
+        type Ok = ();
+        type Err = slog::Never;
+
+        fn log(
+            &self,
+            record: &slog::Record<'_>,
+            values: &slog::OwnedKVList,
+        ) -> Result<Self::Ok, Self::Err> {
+            let mut serializer = CapturingSerializer::default();
+            values.serialize(record, &mut serializer).unwrap();
+            record.kv().serialize(record, &mut serializer).unwrap();
+            self.logs.lock().unwrap().push(CapturedLog {
+                message: record.msg().to_string(),
+                fields: serializer.fields,
+            });
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CapturingSerializer {
+        fields: BTreeMap<String, String>,
+    }
+
+    impl slog::Serializer for CapturingSerializer {
+        fn emit_arguments(
+            &mut self,
+            key: slog::Key,
+            value: &std::fmt::Arguments<'_>,
+        ) -> slog::Result {
+            self.fields.insert(key.to_string(), value.to_string());
+            Ok(())
+        }
+    }
+
+    fn test_logger() -> (slog::Logger, Arc<Mutex<Vec<CapturedLog>>>) {
+        let drain = CapturingDrain::default();
+        let logs = drain.logs.clone();
+        (slog::Logger::root(drain.fuse(), slog::o!()), logs)
+    }
 
     /// 検証: Hacker News の site 名は topstories 収集として扱う
     /// 理由: 長い HN item URL を毎回入力せずに recommend を実行できるようにする
@@ -2365,8 +2587,9 @@ mod tests {
             history_path: Some(history_path.clone()),
             ..Default::default()
         };
+        let logger = Logger::root(slog::Discard, slog::o!());
 
-        let error = collect_recommended(&url, Some(5), None, &config)
+        let error = collect_recommended_with_logger(&url, Some(5), None, &config, &logger)
             .await
             .unwrap_err();
 
@@ -2492,6 +2715,87 @@ mod tests {
 
         assert_eq!(nvd.limit, 10);
         assert_eq!(github_search.limit, 10);
+    }
+
+    #[test]
+    fn logs_source_collection_events_with_structured_fields() {
+        let config = RecommendConfig::default();
+        let arxiv = source_plan_for_site(
+            sites::site_by_name("arxiv").unwrap(),
+            Some(3),
+            Some("cat:cs.SE"),
+            &config,
+        )
+        .unwrap();
+        let (logger, logs) = test_logger();
+
+        log_source_collection_start(&logger, &arxiv);
+        log_source_collection_complete(&logger, &arxiv, 3, 12);
+
+        let logs = logs.lock().unwrap().clone();
+        assert_eq!(logs[0].message, "recommend_source_start");
+        assert_eq!(logs[0].fields["source"], "arxiv");
+        assert_eq!(logs[0].fields["limit"], "3");
+        assert_eq!(logs[0].fields["query"], "cat:cs.SE");
+        assert_eq!(logs[1].message, "recommend_source_complete");
+        assert_eq!(logs[1].fields["source"], "arxiv");
+        assert_eq!(logs[1].fields["item_count"], "3");
+        assert_eq!(logs[1].fields["total_item_count"], "12");
+    }
+
+    #[test]
+    fn logs_source_counts_summary_with_structured_fields() {
+        let items = vec![
+            json!({"site": "hackernews", "url": "https://example.com/1"}),
+            json!({"site": "devto", "url": "https://example.com/2"}),
+            json!({"site": "hackernews", "url": "https://example.com/3"}),
+            json!({"source": "legacy-source", "url": "https://example.com/4"}),
+            json!({"url": "https://example.com/5"}),
+        ];
+        let (logger, logs) = test_logger();
+
+        log_source_counts_summary(&logger, "recommend_new_items_by_source", &items);
+
+        let logs = logs.lock().unwrap().clone();
+        assert_eq!(logs[0].message, "recommend_new_items_by_source");
+        assert_eq!(
+            logs[0].fields["source_counts"],
+            "hackernews=2, devto=1, legacy-source=1, unknown=1"
+        );
+        assert_eq!(logs[0].fields["source_count"], "4");
+        assert_eq!(logs[0].fields["item_count"], "5");
+    }
+
+    #[test]
+    fn source_collection_failure_is_logged_without_dropping_successful_items() {
+        let config = RecommendConfig::default();
+        let plan =
+            source_plan_for_site(sites::site_by_name("nvd").unwrap(), Some(5), None, &config)
+                .unwrap();
+        let (logger, logs) = test_logger();
+        let mut items = vec![json!({
+            "site": "hackernews",
+            "url": "https://example.com/success"
+        })];
+        let mut failures = Vec::new();
+
+        handle_source_collection_result(
+            &logger,
+            &plan,
+            Err(anyhow::anyhow!(
+                "HTTP status server error (503 Service Unavailable)"
+            )),
+            &mut items,
+            &mut failures,
+        );
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(failures.len(), 1);
+        let logs = logs.lock().unwrap().clone();
+        assert_eq!(logs[0].message, "recommend_source_failed");
+        assert_eq!(logs[0].fields["source"], "nvd");
+        assert_eq!(logs[0].fields["limit"], "5");
+        assert!(logs[0].fields["error"].contains("503 Service Unavailable"));
     }
 
     /// 検証: limit は 1 以上 100 以下だけ許可する
@@ -3025,7 +3329,10 @@ mod tests {
     #[ignore = "requires live network access and can be rate limited by remote services"]
     async fn collects_recommendations_from_every_registered_site() {
         let config = RecommendConfig::default();
-        let items = collect_all_sources(Some(1), &config).await.unwrap();
+        let logger = Logger::root(slog::Discard, slog::o!());
+        let items = collect_all_sources_with_logger(Some(1), &config, &logger)
+            .await
+            .unwrap();
         let collected_sites = items
             .iter()
             .filter_map(|item| item.get("site").and_then(Value::as_str))

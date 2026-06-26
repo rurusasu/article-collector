@@ -1,6 +1,7 @@
 mod config;
 mod discovery;
 mod fetch;
+mod logging;
 mod paths;
 mod pipeline;
 mod recommend;
@@ -126,11 +127,16 @@ async fn main() -> Result<()> {
             ref config,
         } => {
             let app_config = config::load(config.as_deref())?;
-            let collection = recommend::collect_recommended(
+            let logger = logging::stderr_logger().new(slog::o!(
+                "command" => "recommend".to_string(),
+                "target" => target.clone(),
+            ));
+            let collection = recommend::collect_recommended_with_logger(
                 target,
                 limit,
                 query.as_deref(),
                 &app_config.recommend,
+                &logger,
             )
             .await?;
             if collection.translation_required {
