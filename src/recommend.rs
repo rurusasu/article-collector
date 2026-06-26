@@ -245,7 +245,7 @@ fn source_count_for_target(target: &str, config: &RecommendConfig) -> Result<usi
     })
 }
 
-fn history_path_for_config(config: &RecommendConfig) -> Result<PathBuf> {
+pub(crate) fn history_path_for_config(config: &RecommendConfig) -> Result<PathBuf> {
     config
         .history_path
         .clone()

@@ -157,6 +157,11 @@ impl RecommendationHistory {
         Ok(inserted)
     }
 
+    pub fn clear_seen_items(&mut self) -> Result<usize> {
+        let deleted = self.conn.execute("DELETE FROM recommend_seen_items", [])?;
+        Ok(deleted)
+    }
+
     pub fn contains_key(&self, dedupe_key: &str) -> Result<bool> {
         let exists: i64 = self.conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM recommend_seen_items WHERE dedupe_key = ?1)",
@@ -335,6 +340,35 @@ mod tests {
         assert_eq!(inserted, 1);
         assert!(store.contains_key("https://example.com/emitted").unwrap());
         assert!(!store.contains_key(&not_emitted_key).unwrap());
+    }
+
+    #[test]
+    fn clears_all_seen_items_and_reports_deleted_count() {
+        let mut store = RecommendationHistory::in_memory_for_tests().unwrap();
+        let first = json!({
+            "source": "hackernews",
+            "site": "hackernews",
+            "title": "First",
+            "url": "https://example.com/first"
+        });
+        let second = json!({
+            "source": "devto",
+            "site": "devto",
+            "title": "Second",
+            "url": "https://example.com/second"
+        });
+
+        store
+            .record_seen_items(&[first.clone(), second.clone()])
+            .unwrap();
+
+        let cleared = store.clear_seen_items().unwrap();
+        let outcome = store.filter_new_items(vec![first, second]).unwrap();
+
+        assert_eq!(cleared, 2);
+        assert_eq!(outcome.items.len(), 2);
+        assert_eq!(outcome.skipped_seen, 0);
+        assert_eq!(outcome.skipped_invalid, 0);
     }
 
     #[test]
