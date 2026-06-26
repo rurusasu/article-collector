@@ -1,6 +1,8 @@
 mod config;
+mod discovery;
 mod fetch;
 mod paths;
+mod pipeline;
 mod recommend;
 mod recommend_artifacts;
 mod recommend_history;

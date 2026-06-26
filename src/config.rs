@@ -20,12 +20,12 @@ pub struct RecommendConfig {
     pub fetch_articles: bool,
     pub create_pr: bool,
     pub history_path: Option<PathBuf>,
-    pub source: BTreeMap<String, RecommendSourceConfig>,
+    pub source: BTreeMap<String, RecommendSiteConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct RecommendSourceConfig {
+pub struct RecommendSiteConfig {
     pub enabled: Option<bool>,
     pub limit: Option<usize>,
     pub query: Option<String>,
