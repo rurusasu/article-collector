@@ -29,7 +29,7 @@ pub use types::FetchRoute;
 
 #[cfg(test)]
 mod tests {
-    use super::types::{DiscoveryEndpoint, JsonRequest, SaveType};
+    use super::types::{DiscoveryEndpoint, JsonRequest, SaveType, SearchRequest};
     use super::*;
 
     #[test]
@@ -92,6 +92,22 @@ mod tests {
         assert!(site.discovery.is_none());
         assert!(!recommendable_site_names().contains(&"thoughtworks-radar"));
         assert!(supported_url_examples().contains(&"https://www.thoughtworks.com/radar"));
+    }
+
+    #[test]
+    fn resolves_twitter_aliases_and_recent_search_discovery() {
+        let site = site_by_name("twitter").unwrap();
+
+        assert_eq!(site_by_name("x").unwrap().name, site.name);
+        assert_eq!(site_by_name("x-twitter").unwrap().name, site.name);
+        assert!(recommendable_site_names().contains(&"twitter"));
+        assert!(matches!(
+            site.discovery,
+            Some(DiscoveryEndpoint::SearchApi {
+                request: SearchRequest::XRecentSearch,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -185,6 +201,7 @@ mod tests {
                 "hackernews",
                 "devto",
                 "zenn",
+                "twitter",
                 "arxiv",
                 "github-advisory",
                 "cisa-kev",
@@ -204,14 +221,15 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 15);
+        assert_eq!(sites.len(), 16);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
         assert_eq!(sites[2].name, "zenn");
-        assert_eq!(sites[3].name, "arxiv");
-        assert_eq!(sites[4].name, "github-advisory");
-        assert_eq!(sites[5].name, "cisa-kev");
-        assert_eq!(sites[14].name, "github-search");
+        assert_eq!(sites[3].name, "twitter");
+        assert_eq!(sites[4].name, "arxiv");
+        assert_eq!(sites[5].name, "github-advisory");
+        assert_eq!(sites[6].name, "cisa-kev");
+        assert_eq!(sites[15].name, "github-search");
         assert!(sites.iter().all(|site| site.discovery.is_some()));
     }
 
