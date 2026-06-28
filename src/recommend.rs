@@ -76,6 +76,7 @@ const MAX_LIMIT: usize = 100;
 const DEFAULT_LIMIT: usize = 30;
 const ALL_TARGET: &str = "all";
 const USER_AGENT: &str = concat!("article-collector/", env!("CARGO_PKG_VERSION"));
+const RECOMMEND_TRANSLATION_CONCURRENCY: usize = 2;
 
 #[derive(Debug)]
 struct SourcePlan {
@@ -83,6 +84,32 @@ struct SourcePlan {
     endpoint: DiscoveryEndpoint,
     limit: usize,
     query: Option<String>,
+}
+
+#[derive(Debug)]
+struct RecommendedArticleTask {
+    index: usize,
+    item: Value,
+    url: String,
+    title: String,
+    stem: String,
+}
+
+#[derive(Debug)]
+struct FetchedRecommendedArticle {
+    index: usize,
+    item: Value,
+    url: String,
+    title: String,
+    stem: String,
+    json_path: PathBuf,
+    content: String,
+}
+
+#[derive(Debug)]
+struct IndexedArticleFailure {
+    index: usize,
+    failure: recommend_artifacts::ArticleFailure,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -285,50 +312,38 @@ async fn collect_recommended_articles(
     let articles_dir = paths::recommended_articles_dir();
     fs::create_dir_all(&articles_dir)?;
 
-    let mut used = HashMap::new();
+    let tasks = recommended_article_tasks(items);
     let mut artifacts = Vec::new();
     let mut failures = Vec::new();
     let mut translated_items = Vec::new();
     let mut fetched_items = Vec::new();
+    let mut fetched_articles = Vec::new();
     let translation_configured = translation_agent_configured();
 
-    for (index, item) in items.into_iter().enumerate() {
-        let url = item
-            .get("url")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let title = item
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("Untitled")
-            .to_string();
-        let source = item
-            .get("site")
-            .and_then(Value::as_str)
-            .or_else(|| item.get("source").and_then(Value::as_str))
-            .unwrap_or("recommend");
-        let stem = recommend_artifacts::article_file_stem(index + 1, source, &title, &mut used);
-
-        let fetched = match fetch::fetch_url_items(&url).await {
+    for task in tasks {
+        let fetched = match fetch::fetch_url_items(&task.url).await {
             Ok(values) => values.into_iter().next().unwrap_or(Value::Null),
             Err(error) => {
-                failures.push(recommend_artifacts::ArticleFailure {
-                    url: url.clone(),
-                    title,
-                    stage: if fetch::is_pdf_url(&url) {
-                        "unsupported_pdf".to_string()
-                    } else {
-                        "fetch".to_string()
+                let stage = if fetch::is_pdf_url(&task.url) {
+                    "unsupported_pdf".to_string()
+                } else {
+                    "fetch".to_string()
+                };
+                failures.push(IndexedArticleFailure {
+                    index: task.index,
+                    failure: recommend_artifacts::ArticleFailure {
+                        url: task.url,
+                        title: task.title,
+                        stage,
+                        error: error.to_string(),
                     },
-                    error: error.to_string(),
                 });
                 continue;
             }
         };
 
         let article_body = article_body_from_fetched(&fetched);
-        let mut article = merge_recommendation_and_article(item, fetched);
+        let mut article = merge_recommendation_and_article(task.item, fetched);
         if let Some(object) = article.as_object_mut() {
             object.insert("article_content".to_string(), json!(article_body));
         }
@@ -337,35 +352,55 @@ async fn collect_recommended_articles(
             object.insert("content".to_string(), json!(content));
         }
 
-        let json_path = recommend_artifacts::write_article_json(&articles_dir, &stem, &article)?;
+        let json_path =
+            recommend_artifacts::write_article_json(&articles_dir, &task.stem, &article)?;
         fetched_items.push(article.clone());
+        fetched_articles.push(FetchedRecommendedArticle {
+            index: task.index,
+            item: article,
+            url: task.url,
+            title: task.title,
+            stem: task.stem,
+            json_path,
+            content,
+        });
+    }
 
-        let translated_path = match translate::translate_content(
-            article.get("content").and_then(Value::as_str).unwrap_or(""),
-        )
-        .await
-        {
+    let translation_results = translate::translate_contents_ordered(
+        fetched_articles
+            .iter()
+            .map(|article| article.content.clone())
+            .collect(),
+        RECOMMEND_TRANSLATION_CONCURRENCY,
+    )
+    .await;
+
+    for (article, translation_result) in fetched_articles.into_iter().zip(translation_results) {
+        let translated_path = match translation_result {
             Ok(translate::TranslateContentOutcome::Translated(markdown)) => {
-                let path = articles_dir.join(format!("{stem}_translated.md"));
+                let path = articles_dir.join(format!("{}_translated.md", article.stem));
                 fs::write(&path, markdown)?;
-                translated_items.push(article.clone());
+                translated_items.push(article.item.clone());
                 Some(path)
             }
             Ok(translate::TranslateContentOutcome::Skipped) => None,
             Err(error) => {
-                failures.push(recommend_artifacts::ArticleFailure {
-                    url: url.clone(),
-                    title,
-                    stage: "translate".to_string(),
-                    error: error.to_string(),
+                failures.push(IndexedArticleFailure {
+                    index: article.index,
+                    failure: recommend_artifacts::ArticleFailure {
+                        url: article.url.clone(),
+                        title: article.title.clone(),
+                        stage: "translate".to_string(),
+                        error: error.to_string(),
+                    },
                 });
                 None
             }
         };
 
         artifacts.push(recommend_artifacts::ArticleArtifact {
-            item: article,
-            json_path,
+            item: article.item,
+            json_path: article.json_path,
             translated_path,
         });
     }
@@ -376,6 +411,7 @@ async fn collect_recommended_articles(
         outdir.join("recommend-fetch-failures.json"),
         "failure artifact path helper should stay aligned with artifact writer"
     );
+    let failures = ordered_failures(failures);
     recommend_artifacts::write_failure_artifact(&outdir, &failures)?;
     ensure_fetch_articles_success(target, translation_configured, translated_items.len())?;
 
@@ -410,6 +446,50 @@ async fn collect_recommended_articles(
         translation_required: false,
         translated_articles: translated_recommended_articles_from_artifacts(&artifacts),
     })
+}
+
+fn recommended_article_tasks(items: Vec<Value>) -> Vec<RecommendedArticleTask> {
+    let mut used = HashMap::new();
+    items
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let url = item
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let title = item
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled")
+                .to_string();
+            let source = item
+                .get("site")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("source").and_then(Value::as_str))
+                .unwrap_or("recommend");
+            let stem = recommend_artifacts::article_file_stem(index + 1, source, &title, &mut used);
+
+            RecommendedArticleTask {
+                index,
+                item,
+                url,
+                title,
+                stem,
+            }
+        })
+        .collect()
+}
+
+fn ordered_failures(
+    mut failures: Vec<IndexedArticleFailure>,
+) -> Vec<recommend_artifacts::ArticleFailure> {
+    failures.sort_by_key(|failure| failure.index);
+    failures
+        .into_iter()
+        .map(|failure| failure.failure)
+        .collect()
 }
 
 fn seen_items_for_fetch_articles(
@@ -2671,6 +2751,32 @@ mod tests {
         let names = plans.iter().map(|plan| plan.site_name).collect::<Vec<_>>();
 
         assert_eq!(names, vec!["zenn", "hackernews"]);
+    }
+
+    #[test]
+    fn recommended_article_tasks_keep_input_order_for_stems() {
+        let items = vec![
+            json!({
+                "url": "https://example.com/slow",
+                "title": "Same Title",
+                "site": "hackernews"
+            }),
+            json!({
+                "url": "https://example.com/fast",
+                "title": "Same Title",
+                "site": "hackernews"
+            }),
+        ];
+
+        let tasks = recommended_article_tasks(items);
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].index, 0);
+        assert_eq!(tasks[0].stem, "001-hackernews-same-title");
+        assert_eq!(tasks[1].index, 1);
+        assert_eq!(tasks[1].stem, "002-hackernews-same-title");
+        assert_eq!(tasks[0].title, "Same Title");
+        assert_eq!(tasks[1].title, "Same Title");
     }
 
     /// 検証: arXiv 単体実行では CLI 指定が config より優先される

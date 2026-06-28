@@ -1,1 +1,1 @@
-pub(crate) use crate::translate::{translate_content, TranslateContentOutcome};
+pub(crate) use crate::translate::{translate_contents_ordered, TranslateContentOutcome};

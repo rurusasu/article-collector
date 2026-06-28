@@ -1,12 +1,12 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::fs;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
-use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
-use tokio::time::timeout;
 
 use crate::paths;
 
@@ -29,6 +29,7 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
     };
 
     let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
+    let mut translator = AcpTranslator::spawn(agent, lang).await?;
 
     // Extract content from input JSON
     let raw = fs::read_to_string(input).context("Failed to read input file")?;
@@ -40,7 +41,7 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
     }
 
     // Translate main content
-    let translated = translate_text(agent, &lang, &content).await?;
+    let translated = translator.translate_content(&content).await?;
     let outdir = paths::temp_dir();
     fs::create_dir_all(&outdir)?;
     let translated_path = paths::translated_md_path();
@@ -60,7 +61,7 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
                     continue;
                 }
 
-                let emb_translated = translate_text(agent, &lang, &emb_content).await?;
+                let emb_translated = translator.translate_content(&emb_content).await?;
                 let emb_path = outdir.join(format!("{basename}_translated.md"));
                 fs::write(emb_path, emb_translated)?;
             }
@@ -69,21 +70,6 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
 
     eprintln!("Translation complete");
     Ok(TranslateOutcome::Translated)
-}
-
-pub async fn translate_content(content: &str) -> Result<TranslateContentOutcome> {
-    if content.trim().is_empty() {
-        bail!("No content extracted for translation");
-    }
-
-    let Some(agent) = acp_agent_from_env()? else {
-        eprintln!("Error: ACP_AGENT is not set. Translation skipped.");
-        return Ok(TranslateContentOutcome::Skipped);
-    };
-
-    let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
-    let translated = translate_text(agent, &lang, content).await?;
-    Ok(TranslateContentOutcome::Translated(translated))
 }
 
 #[cfg(test)]
@@ -103,66 +89,213 @@ fn translate_content_outcome_for_agent(
     Ok(TranslateContentOutcome::Translated(String::new()))
 }
 
-async fn translate_text(agent: AcpAgent, lang: &str, content: &str) -> Result<String> {
-    let prompt = format!(
-        "以下の記事を{lang}に翻訳してください。Markdown形式を維持し、技術用語は適切に翻訳してください。翻訳結果のみを出力してください。\n\n{content}"
-    );
+pub(crate) async fn translate_contents_ordered(
+    contents: Vec<String>,
+    concurrency: usize,
+) -> Vec<Result<TranslateContentOutcome>> {
+    if contents.is_empty() {
+        return Vec::new();
+    }
 
-    call_acp_agent(agent, &prompt).await
+    let agent = match acp_agent_from_env() {
+        Ok(Some(agent)) => agent,
+        Ok(None) => {
+            return contents
+                .into_iter()
+                .map(|content| {
+                    if content.trim().is_empty() {
+                        bail!("No content extracted for translation");
+                    }
+                    Ok(TranslateContentOutcome::Skipped)
+                })
+                .collect();
+        }
+        Err(error) => {
+            let message = error.to_string();
+            return contents
+                .into_iter()
+                .map(|_| Err(anyhow!(message.clone())))
+                .collect();
+        }
+    };
+    let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
+    let item_count = contents.len();
+    let worker_count = concurrency.max(1).min(item_count);
+    let buckets = translation_buckets(contents, worker_count);
+    let mut handles = Vec::new();
+
+    for bucket in buckets {
+        let lang = lang.clone();
+        handles.push(tokio::spawn(async move {
+            translate_content_bucket(agent, lang, bucket).await
+        }));
+    }
+
+    let mut ordered = (0..item_count).map(|_| None).collect::<Vec<_>>();
+    for handle in handles {
+        match handle.await {
+            Ok(results) => {
+                for (index, result) in results {
+                    ordered[index] = Some(result);
+                }
+            }
+            Err(error) => {
+                let message = error.to_string();
+                for slot in ordered.iter_mut().filter(|slot| slot.is_none()) {
+                    *slot = Some(Err(anyhow!(message.clone())));
+                }
+            }
+        }
+    }
+
+    ordered
+        .into_iter()
+        .map(|result| {
+            result.unwrap_or_else(|| Err(anyhow!("translation worker did not return a result")))
+        })
+        .collect()
 }
 
-async fn call_acp_agent(agent: AcpAgent, prompt: &str) -> Result<String> {
-    eprintln!("Calling ACP agent...");
+async fn translate_content_bucket(
+    agent: AcpAgent,
+    lang: String,
+    bucket: Vec<(usize, String)>,
+) -> Vec<(usize, Result<TranslateContentOutcome>)> {
+    let mut translator = match AcpTranslator::spawn(agent, lang).await {
+        Ok(translator) => translator,
+        Err(error) => {
+            let message = error.to_string();
+            return bucket
+                .into_iter()
+                .map(|(index, _)| (index, Err(anyhow!(message.clone()))))
+                .collect();
+        }
+    };
 
-    let mut client = AcpJsonRpcClient::spawn(agent.command()).await?;
+    let mut results = Vec::with_capacity(bucket.len());
+    for (index, content) in bucket {
+        let result = translator
+            .translate_content(&content)
+            .await
+            .map(TranslateContentOutcome::Translated);
+        results.push((index, result));
+    }
+    results
+}
 
-    let initialize = client
-        .request("initialize", acp_initialize_params())
-        .await
-        .context("ACP initialize failed")?;
-    let protocol_version = initialize
-        .get("protocolVersion")
-        .and_then(Value::as_i64)
-        .context("ACP initialize response missing protocolVersion")?;
-    if protocol_version != 1 {
-        bail!("ACP agent negotiated unsupported protocolVersion {protocol_version}");
+fn translation_buckets(contents: Vec<String>, worker_count: usize) -> Vec<Vec<(usize, String)>> {
+    let mut buckets = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
+    for (index, content) in contents.into_iter().enumerate() {
+        buckets[index % worker_count].push((index, content));
+    }
+    buckets
+}
+
+fn translation_prompt(lang: &str, content: &str) -> String {
+    format!(
+        "以下の記事を{lang}に翻訳してください。Markdown形式を維持し、技術用語は適切に翻訳してください。翻訳結果のみを出力してください。\n\n{content}"
+    )
+}
+
+type AcpRpcFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
+
+trait AcpRpcClient {
+    fn rpc_request<'a>(&'a mut self, method: &'a str, params: Value) -> AcpRpcFuture<'a>;
+
+    fn rpc_request_collecting_text<'a>(
+        &'a mut self,
+        method: &'a str,
+        params: Value,
+        text: &'a mut String,
+    ) -> AcpRpcFuture<'a>;
+}
+
+struct AcpTranslator<C = AcpJsonRpcClient> {
+    client: C,
+    lang: String,
+}
+
+impl<C: AcpRpcClient> AcpTranslator<C> {
+    async fn with_client(mut client: C, lang: impl Into<String>) -> Result<Self> {
+        let initialize = client
+            .rpc_request("initialize", acp_initialize_params())
+            .await
+            .context("ACP initialize failed")?;
+        let protocol_version = initialize
+            .get("protocolVersion")
+            .and_then(Value::as_i64)
+            .context("ACP initialize response missing protocolVersion")?;
+        if protocol_version != 1 {
+            bail!("ACP agent negotiated unsupported protocolVersion {protocol_version}");
+        }
+
+        Ok(Self {
+            client,
+            lang: lang.into(),
+        })
     }
 
-    let session = client
-        .request("session/new", acp_new_session_params()?)
-        .await
-        .context("ACP session/new failed")?;
-    let session_id = session
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .context("ACP session/new response missing sessionId")?
-        .to_string();
+    async fn translate_content(&mut self, content: &str) -> Result<String> {
+        if content.trim().is_empty() {
+            bail!("No content extracted for translation");
+        }
 
-    let mut translated = String::new();
-    let prompt_response = client
-        .request_collecting_text(
-            "session/prompt",
-            acp_prompt_params(&session_id, prompt),
-            &mut translated,
-        )
-        .await
-        .context("ACP session/prompt failed")?;
-
-    let stop_reason = prompt_response
-        .get("stopReason")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    if stop_reason != "end_turn" {
-        bail!("ACP agent stopped before completing translation: {stop_reason}");
+        let prompt = translation_prompt(&self.lang, content);
+        self.call_prompt(&prompt).await
     }
 
-    let translated = strip_acp_translation_boilerplate(translated.trim());
-    if translated.is_empty() {
-        bail!("ACP agent returned empty translation");
+    #[cfg(test)]
+    fn into_client(self) -> C {
+        self.client
     }
 
-    client.shutdown().await;
-    Ok(translated)
+    async fn call_prompt(&mut self, prompt: &str) -> Result<String> {
+        eprintln!("Calling ACP agent...");
+
+        let session = self
+            .client
+            .rpc_request("session/new", acp_new_session_params()?)
+            .await
+            .context("ACP session/new failed")?;
+        let session_id = session
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("ACP session/new response missing sessionId")?
+            .to_string();
+
+        let mut translated = String::new();
+        let prompt_response = self
+            .client
+            .rpc_request_collecting_text(
+                "session/prompt",
+                acp_prompt_params(&session_id, prompt),
+                &mut translated,
+            )
+            .await
+            .context("ACP session/prompt failed")?;
+
+        let stop_reason = prompt_response
+            .get("stopReason")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        if stop_reason != "end_turn" {
+            bail!("ACP agent stopped before completing translation: {stop_reason}");
+        }
+
+        let translated = strip_acp_translation_boilerplate(translated.trim());
+        if translated.is_empty() {
+            bail!("ACP agent returned empty translation");
+        }
+
+        Ok(translated)
+    }
+}
+
+impl AcpTranslator<AcpJsonRpcClient> {
+    async fn spawn(agent: AcpAgent, lang: impl Into<String>) -> Result<Self> {
+        let client = AcpJsonRpcClient::spawn(agent.command()).await?;
+        Self::with_client(client, lang).await
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -425,18 +558,20 @@ impl AcpJsonRpcClient {
 
         self.send_message(&response).await
     }
+}
 
-    async fn shutdown(mut self) {
-        let _ = self.stdin.shutdown().await;
-        if matches!(
-            timeout(Duration::from_millis(500), self.child.wait()).await,
-            Ok(Ok(_))
-        ) {
-            return;
-        }
+impl AcpRpcClient for AcpJsonRpcClient {
+    fn rpc_request<'a>(&'a mut self, method: &'a str, params: Value) -> AcpRpcFuture<'a> {
+        Box::pin(async move { self.request(method, params).await })
+    }
 
-        let _ = self.child.start_kill();
-        let _ = self.child.wait().await;
+    fn rpc_request_collecting_text<'a>(
+        &'a mut self,
+        method: &'a str,
+        params: Value,
+        text: &'a mut String,
+    ) -> AcpRpcFuture<'a> {
+        Box::pin(async move { self.request_collecting_text(method, params, text).await })
     }
 }
 
@@ -545,6 +680,7 @@ pub fn extract_single_content(data: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::{future::Future, pin::Pin};
 
     // ── ACP JSON-RPC ──
 
@@ -604,6 +740,37 @@ mod tests {
         );
 
         assert_eq!(output, "hello");
+    }
+
+    #[tokio::test]
+    async fn reusable_translator_creates_new_session_for_each_prompt() {
+        let client = RecordingRpcClient::new(["最初の翻訳", "二番目の翻訳"]);
+        let mut translator = AcpTranslator::with_client(client, "ja").await.unwrap();
+
+        assert_eq!(
+            translator.translate_content("first article").await.unwrap(),
+            "最初の翻訳"
+        );
+        assert_eq!(
+            translator
+                .translate_content("second article")
+                .await
+                .unwrap(),
+            "二番目の翻訳"
+        );
+
+        let client = translator.into_client();
+        assert_eq!(
+            client.methods,
+            vec![
+                "initialize",
+                "session/new",
+                "session/prompt",
+                "session/new",
+                "session/prompt"
+            ]
+        );
+        assert_eq!(client.prompt_session_ids, vec!["session-1", "session-2"]);
     }
 
     #[test]
@@ -711,6 +878,68 @@ mod tests {
     #[test]
     fn rejects_unknown_acp_agent() {
         assert!(AcpAgent::parse("unknown").is_err());
+    }
+
+    struct RecordingRpcClient {
+        methods: Vec<String>,
+        outputs: Vec<String>,
+        next_session: usize,
+        prompt_session_ids: Vec<String>,
+    }
+
+    impl RecordingRpcClient {
+        fn new<const N: usize>(outputs: [&str; N]) -> Self {
+            Self {
+                methods: Vec::new(),
+                outputs: outputs.into_iter().map(str::to_string).collect(),
+                next_session: 1,
+                prompt_session_ids: Vec::new(),
+            }
+        }
+    }
+
+    impl AcpRpcClient for RecordingRpcClient {
+        fn rpc_request<'a>(
+            &'a mut self,
+            method: &'a str,
+            _params: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                self.methods.push(method.to_string());
+                match method {
+                    "initialize" => Ok(json!({"protocolVersion": 1})),
+                    "session/new" => {
+                        let session_id = format!("session-{}", self.next_session);
+                        self.next_session += 1;
+                        Ok(json!({"sessionId": session_id}))
+                    }
+                    other => bail!("unexpected request method {other}"),
+                }
+            })
+        }
+
+        fn rpc_request_collecting_text<'a>(
+            &'a mut self,
+            method: &'a str,
+            params: Value,
+            text: &'a mut String,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                self.methods.push(method.to_string());
+                if method != "session/prompt" {
+                    bail!("unexpected text request method {method}");
+                }
+                let session_id = params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<missing>")
+                    .to_string();
+                self.prompt_session_ids.push(session_id);
+                let output = self.outputs.remove(0);
+                text.push_str(&output);
+                Ok(json!({"stopReason": "end_turn"}))
+            })
+        }
     }
 
     // ── extract_content (array) ──
