@@ -5,10 +5,15 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command as TokioCommand};
 
 use crate::paths;
+
+const TRANSLATION_TIMEOUT_SECS_ENV: &str = "ARTICLE_COLLECTOR_TRANSLATION_TIMEOUT_SECS";
+const DEFAULT_TRANSLATION_TIMEOUT_SECS: u64 = 600;
+const TRANSLATION_RETRY_COUNT: usize = 1;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TranslateOutcome {
@@ -236,12 +241,56 @@ impl<C: AcpRpcClient> AcpTranslator<C> {
     }
 
     async fn translate_content(&mut self, content: &str) -> Result<String> {
+        self.translate_content_with_timeout_and_retries(
+            content,
+            translation_timeout(),
+            TRANSLATION_RETRY_COUNT,
+        )
+        .await
+    }
+
+    async fn translate_content_with_timeout_and_retries(
+        &mut self,
+        content: &str,
+        timeout_duration: Duration,
+        retries: usize,
+    ) -> Result<String> {
         if content.trim().is_empty() {
             bail!("No content extracted for translation");
         }
 
         let prompt = translation_prompt(&self.lang, content);
-        self.call_prompt(&prompt).await
+        let attempts = retries.saturating_add(1);
+        for attempt in 1..=attempts {
+            match self
+                .call_prompt_with_timeout(&prompt, timeout_duration)
+                .await
+            {
+                Ok(translated) => return Ok(translated),
+                Err(error) if attempt < attempts => {
+                    eprintln!(
+                        "ACP translation attempt {attempt}/{attempts} failed: {error}. Retrying..."
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+
+        unreachable!("translation attempt loop always returns")
+    }
+
+    async fn call_prompt_with_timeout(
+        &mut self,
+        prompt: &str,
+        timeout_duration: Duration,
+    ) -> Result<String> {
+        match tokio::time::timeout(timeout_duration, self.call_prompt(prompt)).await {
+            Ok(result) => result,
+            Err(_) => bail!(
+                "ACP translation timed out after {}",
+                format_duration(timeout_duration)
+            ),
+        }
     }
 
     #[cfg(test)]
@@ -288,6 +337,24 @@ impl<C: AcpRpcClient> AcpTranslator<C> {
         }
 
         Ok(translated)
+    }
+}
+
+fn translation_timeout() -> Duration {
+    std::env::var(TRANSLATION_TIMEOUT_SECS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_TRANSLATION_TIMEOUT_SECS))
+}
+
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds > 0 {
+        format!("{seconds}s")
+    } else {
+        format!("{}ms", duration.as_millis())
     }
 }
 
@@ -680,7 +747,7 @@ pub fn extract_single_content(data: &Value) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::{future::Future, pin::Pin};
+    use std::{future::Future, pin::Pin, time::Duration};
 
     // ── ACP JSON-RPC ──
 
@@ -771,6 +838,36 @@ mod tests {
             ]
         );
         assert_eq!(client.prompt_session_ids, vec!["session-1", "session-2"]);
+    }
+
+    #[tokio::test]
+    async fn translator_times_out_slow_prompt() {
+        let client = SlowRpcClient;
+        let mut translator = AcpTranslator::with_client(client, "ja").await.unwrap();
+
+        let error = translator
+            .translate_content_with_timeout_and_retries(
+                "slow article",
+                Duration::from_millis(10),
+                0,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    async fn translator_retries_prompt_failure_once() {
+        let client = FlakyRpcClient::new();
+        let mut translator = AcpTranslator::with_client(client, "ja").await.unwrap();
+
+        let translated = translator
+            .translate_content_with_timeout_and_retries("retry article", Duration::from_secs(1), 1)
+            .await
+            .unwrap();
+
+        assert_eq!(translated, "リトライ後の翻訳");
     }
 
     #[test]
@@ -937,6 +1034,92 @@ mod tests {
                 self.prompt_session_ids.push(session_id);
                 let output = self.outputs.remove(0);
                 text.push_str(&output);
+                Ok(json!({"stopReason": "end_turn"}))
+            })
+        }
+    }
+
+    struct SlowRpcClient;
+
+    impl AcpRpcClient for SlowRpcClient {
+        fn rpc_request<'a>(
+            &'a mut self,
+            method: &'a str,
+            _params: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                match method {
+                    "initialize" => Ok(json!({"protocolVersion": 1})),
+                    "session/new" => Ok(json!({"sessionId": "slow-session"})),
+                    other => bail!("unexpected request method {other}"),
+                }
+            })
+        }
+
+        fn rpc_request_collecting_text<'a>(
+            &'a mut self,
+            method: &'a str,
+            _params: Value,
+            _text: &'a mut String,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                if method != "session/prompt" {
+                    bail!("unexpected text request method {method}");
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Ok(json!({"stopReason": "end_turn"}))
+            })
+        }
+    }
+
+    struct FlakyRpcClient {
+        prompt_attempts: usize,
+        next_session: usize,
+    }
+
+    impl FlakyRpcClient {
+        fn new() -> Self {
+            Self {
+                prompt_attempts: 0,
+                next_session: 1,
+            }
+        }
+    }
+
+    impl AcpRpcClient for FlakyRpcClient {
+        fn rpc_request<'a>(
+            &'a mut self,
+            method: &'a str,
+            _params: Value,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                match method {
+                    "initialize" => Ok(json!({"protocolVersion": 1})),
+                    "session/new" => {
+                        let session_id = format!("retry-session-{}", self.next_session);
+                        self.next_session += 1;
+                        Ok(json!({"sessionId": session_id}))
+                    }
+                    other => bail!("unexpected request method {other}"),
+                }
+            })
+        }
+
+        fn rpc_request_collecting_text<'a>(
+            &'a mut self,
+            method: &'a str,
+            _params: Value,
+            text: &'a mut String,
+        ) -> Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>> {
+            Box::pin(async move {
+                if method != "session/prompt" {
+                    bail!("unexpected text request method {method}");
+                }
+                self.prompt_attempts += 1;
+                if self.prompt_attempts == 1 {
+                    bail!("temporary prompt failure");
+                }
+                text.push_str("リトライ後の翻訳");
                 Ok(json!({"stopReason": "end_turn"}))
             })
         }
