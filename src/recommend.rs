@@ -1488,6 +1488,167 @@ fn generic_feed_item_to_recommendation(
     }))
 }
 
+async fn collect_x_recent_search(
+    api_url: &str,
+    query: &str,
+    limit: usize,
+    bearer_token: &str,
+) -> Result<Vec<Value>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let max_results = x_api_max_results(limit);
+    let response = client
+        .get(api_url)
+        .bearer_auth(bearer_token)
+        .query(&[
+            ("query", query),
+            ("max_results", &max_results.to_string()),
+            (
+                "tweet.fields",
+                "created_at,public_metrics,author_id,entities",
+            ),
+            ("expansions", "author_id"),
+            ("user.fields", "username,name"),
+        ])
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch X recent search from {api_url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let reset = response
+            .headers()
+            .get("x-rate-limit-reset")
+            .and_then(|value| value.to_str().ok())
+            .map(|value| format!(" x-rate-limit-reset={value}"))
+            .unwrap_or_default();
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "X recent search failed with HTTP status {status}.{reset} Response: {}",
+            body.chars().take(500).collect::<String>()
+        );
+    }
+
+    let value: Value = response
+        .json()
+        .await
+        .context("Failed to parse X recent search response")?;
+    parse_x_recent_search_response(&value, limit)
+}
+
+fn x_api_max_results(limit: usize) -> usize {
+    limit.clamp(10, 100)
+}
+
+fn x_bearer_token() -> Result<String> {
+    x_bearer_token_from_env(|name| std::env::var(name).ok())
+}
+
+fn x_bearer_token_from_env<F>(get_env: F) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    get_env("X_BEARER_TOKEN")
+        .or_else(|| get_env("TWITTER_BEARER_TOKEN"))
+        .filter(|token| !token.trim().is_empty())
+        .context("X recent search requires X_BEARER_TOKEN or TWITTER_BEARER_TOKEN")
+}
+
+fn parse_x_recent_search_response(response: &Value, limit: usize) -> Result<Vec<Value>> {
+    let users = x_user_lookup(response);
+    let Some(data) = response.get("data").and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(data
+        .iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(index, tweet)| normalize_x_tweet(tweet, index + 1, &users))
+        .collect())
+}
+
+fn x_user_lookup(response: &Value) -> HashMap<String, Value> {
+    response
+        .get("includes")
+        .and_then(|includes| includes.get("users"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|user| {
+            user.get("id")
+                .and_then(Value::as_str)
+                .map(|id| (id.to_string(), user.clone()))
+        })
+        .collect()
+}
+
+fn normalize_x_tweet(tweet: &Value, rank: usize, users: &HashMap<String, Value>) -> Option<Value> {
+    let tweet_id = tweet.get("id").and_then(Value::as_str)?;
+    let text = tweet.get("text").and_then(Value::as_str).unwrap_or("");
+    let author_id = tweet.get("author_id").and_then(Value::as_str);
+    let user = author_id.and_then(|id| users.get(id));
+    let username = user
+        .and_then(|user| user.get("username"))
+        .and_then(Value::as_str);
+    let author = user
+        .and_then(|user| user.get("name"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let url = x_tweet_url(username, tweet_id);
+    let title = x_tweet_title(text, tweet_id);
+
+    let mut item = json!({
+        "source": "twitter",
+        "site": "twitter",
+        "rank": rank,
+        "title": title,
+        "url": url,
+        "content": text,
+        "tweet_id": tweet_id,
+        "type": "x"
+    });
+
+    if let Some(object) = item.as_object_mut() {
+        if !author.is_empty() {
+            object.insert("author".to_string(), json!(author));
+        }
+        if let Some(username) = username {
+            object.insert("username".to_string(), json!(username));
+        }
+        if let Some(created_at) = tweet.get("created_at").and_then(Value::as_str) {
+            object.insert("created_at".to_string(), json!(created_at));
+        }
+        if let Some(metrics) = tweet.get("public_metrics") {
+            object.insert("public_metrics".to_string(), metrics.clone());
+        }
+    }
+
+    Some(item)
+}
+
+fn x_tweet_url(username: Option<&str>, tweet_id: &str) -> String {
+    match username.filter(|username| !username.trim().is_empty()) {
+        Some(username) => format!("https://x.com/{username}/status/{tweet_id}"),
+        None => format!("https://x.com/i/web/status/{tweet_id}"),
+    }
+}
+
+fn x_tweet_title(text: &str, tweet_id: &str) -> String {
+    let first_line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let title = first_line.chars().take(80).collect::<String>();
+    if title.trim().is_empty() {
+        format!("X post {tweet_id}")
+    } else {
+        title
+    }
+}
+
 async fn collect_arxiv_search(api_url: &str, query: &str, limit: usize) -> Result<Vec<Value>> {
     let url = build_arxiv_search_url(api_url, query, limit)?;
     let client = reqwest::Client::builder()
@@ -2202,6 +2363,16 @@ async fn collect_source(
             )
             .await?
         }
+        DiscoveryEndpoint::SearchApi {
+            api_url,
+            default_query,
+            request: SearchRequest::XRecentSearch,
+        } => {
+            let query =
+                query_override_or_default(query, required_default_query(site_name, default_query)?);
+            let token = x_bearer_token()?;
+            collect_x_recent_search(api_url, query, limit, &token).await?
+        }
         DiscoveryEndpoint::SearchApi { .. } => {
             bail!("No search API discovery collector registered for site '{site_name}'")
         }
@@ -2467,6 +2638,25 @@ mod tests {
         };
         assert_eq!(site_name, "zenn");
         assert_eq!(feed_url, "https://zenn.dev/feed");
+    }
+
+    #[test]
+    fn resolves_twitter_site_name_to_recent_search() {
+        let RecommendationTarget::Source {
+            site_name,
+            endpoint:
+                DiscoveryEndpoint::SearchApi {
+                    api_url,
+                    default_query,
+                    request: SearchRequest::XRecentSearch,
+                },
+        } = resolve_recommendation_target("twitter").unwrap()
+        else {
+            panic!("twitter should resolve to X recent search");
+        };
+        assert_eq!(site_name, "twitter");
+        assert_eq!(api_url, "https://api.x.com/2/tweets/search/recent");
+        assert!(default_query.unwrap().contains("-is:retweet"));
     }
 
     /// 検証: arXiv の site 名は既定 query の arXiv API 収集へ解決する
@@ -2777,6 +2967,89 @@ mod tests {
         assert_eq!(tasks[1].stem, "002-hackernews-same-title");
         assert_eq!(tasks[0].title, "Same Title");
         assert_eq!(tasks[1].title, "Same Title");
+    }
+
+    #[test]
+    fn twitter_source_plan_uses_config_query_and_limit() {
+        let config = RecommendConfig {
+            sources: Some(vec!["twitter".to_string()]),
+            source: BTreeMap::from([(
+                "twitter".to_string(),
+                RecommendSiteConfig {
+                    limit: Some(7),
+                    query: Some("rust lang:en -is:retweet".to_string()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+
+        let plans = source_plans_for_all(None, &config).unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].site_name, "twitter");
+        assert_eq!(plans[0].limit, 7);
+        assert_eq!(plans[0].query.as_deref(), Some("rust lang:en -is:retweet"));
+    }
+
+    #[test]
+    fn reports_missing_x_bearer_token() {
+        let error = x_bearer_token_from_env(|_| None).unwrap_err();
+
+        assert!(error.to_string().contains("X_BEARER_TOKEN"));
+        assert!(error.to_string().contains("TWITTER_BEARER_TOKEN"));
+    }
+
+    #[test]
+    fn prefers_x_bearer_token_over_twitter_bearer_token() {
+        let token = x_bearer_token_from_env(|name| match name {
+            "X_BEARER_TOKEN" => Some("x-token".to_string()),
+            "TWITTER_BEARER_TOKEN" => Some("twitter-token".to_string()),
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(token, "x-token");
+    }
+
+    #[test]
+    fn normalizes_x_recent_search_response() {
+        let response = json!({
+            "data": [{
+                "id": "1800000000000000000",
+                "text": "Rust async tooling keeps getting better\nSecond line",
+                "author_id": "42",
+                "created_at": "2026-06-28T00:00:00.000Z",
+                "public_metrics": {
+                    "retweet_count": 3,
+                    "reply_count": 2,
+                    "like_count": 10,
+                    "quote_count": 1
+                }
+            }],
+            "includes": {
+                "users": [{
+                    "id": "42",
+                    "username": "alice",
+                    "name": "Alice Example"
+                }]
+            }
+        });
+
+        let items = parse_x_recent_search_response(&response, 10).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "twitter");
+        assert_eq!(items[0]["site"], "twitter");
+        assert_eq!(items[0]["tweet_id"], "1800000000000000000");
+        assert_eq!(items[0]["title"], "Rust async tooling keeps getting better");
+        assert_eq!(
+            items[0]["url"],
+            "https://x.com/alice/status/1800000000000000000"
+        );
+        assert_eq!(items[0]["author"], "Alice Example");
+        assert_eq!(items[0]["username"], "alice");
+        assert_eq!(items[0]["public_metrics"]["like_count"], 10);
     }
 
     /// 検証: arXiv 単体実行では CLI 指定が config より優先される
@@ -3273,6 +3546,46 @@ mod tests {
         assert_eq!(items[0]["updated_at"], "2026-06-24T00:00:00Z");
     }
 
+    #[tokio::test]
+    async fn collect_x_recent_search_sends_bearer_query_and_fields() {
+        let api_url = serve_x_recent_search_api(
+            200,
+            r#"{
+                "data": [{
+                    "id": "1800000000000000001",
+                    "text": "Security research example",
+                    "author_id": "7"
+                }],
+                "includes": {
+                    "users": [{"id":"7","username":"sec","name":"Security Example"}]
+                }
+            }"#,
+        )
+        .await;
+
+        let items = collect_x_recent_search(&api_url, "security lang:en", 5, "token-123")
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["url"],
+            "https://x.com/sec/status/1800000000000000001"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_x_recent_search_reports_http_errors() {
+        let api_url = serve_x_recent_search_api(429, r#"{"title":"Too Many Requests"}"#).await;
+
+        let error = collect_x_recent_search(&api_url, "security lang:en", 5, "token-123")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("X recent search failed"));
+        assert!(error.to_string().contains("429"));
+    }
+
     #[test]
     fn builds_github_search_url_with_query() {
         let url = build_github_search_url(
@@ -3415,6 +3728,38 @@ mod tests {
         });
 
         format!("http://{address}/empty")
+    }
+
+    async fn serve_x_recent_search_api(status: u16, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buffer = [0_u8; 4096];
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let bytes_read = socket.read(&mut request_buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&request_buffer[..bytes_read]).to_string();
+            let lower_request = request.to_ascii_lowercase();
+            assert!(request.starts_with("GET /?"));
+            assert!(request.contains("query=security"));
+            assert!(request.contains("max_results=10"));
+            assert!(lower_request.contains("authorization: bearer token-123"));
+            assert!(request.contains("tweet.fields="));
+            assert!(request.contains("expansions=author_id"));
+            let reason = if status == 200 {
+                "OK"
+            } else {
+                "Too Many Requests"
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}")
     }
 
     fn unique_temp_history_path(name: &str) -> PathBuf {
