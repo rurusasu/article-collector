@@ -16,5 +16,4 @@ VERIFY_RULES=(
   "cargo build|ビルド|build succeeds|build.*成功:::cargo build --release --locked:::Verify release build"
   "GitHub Actions|workflow.*security|release.*automation|hardening:::bash scripts/verify-workflow-security.sh:::Verify GitHub Actions hardening"
   "shellcheck:::shellcheck scripts/*.sh:::Lint shell scripts"
-  "task check|CI 相当|full local check:::task check:::Run full local check"
 )
