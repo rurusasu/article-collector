@@ -91,6 +91,7 @@ pub enum JsonRequest {
 pub enum SearchRequest {
     QueryParam { name: &'static str },
     ArxivSearch,
+    XRecentSearch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

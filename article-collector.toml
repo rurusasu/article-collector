@@ -3,6 +3,7 @@ sources = [
   "hackernews",
   "devto",
   "zenn",
+  "twitter",
   "arxiv",
   "github-advisory",
   "cisa-kev",
@@ -24,6 +25,10 @@ create_pr = false
 [recommend.source.arxiv]
 limit = 10
 query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
+
+[recommend.source.twitter]
+limit = 10
+query = "(AI OR Rust OR security) lang:en -is:retweet"
 
 [recommend.source.github-advisory]
 limit = 10
