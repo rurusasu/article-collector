@@ -28,7 +28,7 @@
 - Modify: `src/sites/mod.rs`
 - Modify: `src/recommend.rs`
 
-- [ ] **Step 1: Write failing registry tests**
+- [x] **Step 1: Write failing registry tests**
 
 Add tests in `src/sites/mod.rs`:
 
@@ -51,7 +51,7 @@ fn resolves_twitter_aliases_and_recent_search_discovery() {
 
 Also update `lists_recommendable_site_names()` and `lists_recommendable_sites()` to include `twitter` after `zenn`, preserving registry order.
 
-- [ ] **Step 2: Write failing recommend target/source-plan tests**
+- [x] **Step 2: Write failing recommend target/source-plan tests**
 
 Add tests in `src/recommend.rs`:
 
@@ -97,7 +97,7 @@ fn twitter_source_plan_uses_config_query_and_limit() {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify RED**
+- [x] **Step 3: Run tests to verify RED**
 
 Run:
 
@@ -107,7 +107,7 @@ cargo test --locked sites::tests::resolves_twitter_aliases_and_recent_search_dis
 
 Expected: FAIL because `SearchRequest::XRecentSearch` does not exist and `twitter` has no discovery endpoint.
 
-- [ ] **Step 4: Implement minimal registry support**
+- [x] **Step 4: Implement minimal registry support**
 
 In `src/sites/types.rs`, change `SearchRequest` to:
 
@@ -137,7 +137,7 @@ discovery: Some(DiscoveryEndpoint::SearchApi {
 
 Update `src/sites/mod.rs` imports to include `SearchRequest`, and update expected recommendable names/length.
 
-- [ ] **Step 5: Run tests to verify GREEN**
+- [x] **Step 5: Run tests to verify GREEN**
 
 Run:
 
@@ -152,7 +152,7 @@ Expected: PASS.
 **Files:**
 - Modify: `src/recommend.rs`
 
-- [ ] **Step 1: Write failing collector helper tests**
+- [x] **Step 1: Write failing collector helper tests**
 
 Add tests in `src/recommend.rs`:
 
@@ -216,7 +216,7 @@ fn normalizes_x_recent_search_response() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify RED**
+- [x] **Step 2: Run tests to verify RED**
 
 Run:
 
@@ -226,7 +226,7 @@ cargo test --locked recommend::tests::reports_missing_x_bearer_token recommend::
 
 Expected: FAIL because the helper functions are missing.
 
-- [ ] **Step 3: Implement helper functions**
+- [x] **Step 3: Implement helper functions**
 
 Add helper functions in `src/recommend.rs` near other source-specific helpers:
 
@@ -348,7 +348,7 @@ fn x_tweet_title(text: &str, tweet_id: &str) -> String {
 }
 ```
 
-- [ ] **Step 4: Run helper tests to verify GREEN**
+- [x] **Step 4: Run helper tests to verify GREEN**
 
 Run:
 
@@ -358,7 +358,7 @@ cargo test --locked recommend::tests::reports_missing_x_bearer_token recommend::
 
 Expected: PASS.
 
-- [ ] **Step 5: Write failing async request/error tests**
+- [x] **Step 5: Write failing async request/error tests**
 
 Add tests in `src/recommend.rs`:
 
@@ -425,7 +425,7 @@ async fn serve_x_recent_search_api(status: u16, body: &'static str) -> String {
 }
 ```
 
-- [ ] **Step 6: Run async tests to verify RED**
+- [x] **Step 6: Run async tests to verify RED**
 
 Run:
 
@@ -435,7 +435,7 @@ cargo test --locked recommend::tests::collect_x_recent_search_sends_bearer_query
 
 Expected: FAIL because `collect_x_recent_search` is missing.
 
-- [ ] **Step 7: Implement async collector and dispatch**
+- [x] **Step 7: Implement async collector and dispatch**
 
 Add `collect_x_recent_search`:
 
@@ -495,7 +495,7 @@ DiscoveryEndpoint::SearchApi {
 }
 ```
 
-- [ ] **Step 8: Run collector tests to verify GREEN**
+- [x] **Step 8: Run collector tests to verify GREEN**
 
 Run:
 
@@ -513,7 +513,7 @@ Expected: PASS.
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-06-28-x-recent-search-recommendations.md`
 
-- [ ] **Step 1: Update sample config**
+- [x] **Step 1: Update sample config**
 
 Add `twitter` to `[recommend].sources` after `zenn`, and add:
 
@@ -523,7 +523,7 @@ limit = 10
 query = "(AI OR Rust OR security) lang:en -is:retweet"
 ```
 
-- [ ] **Step 2: Update site docs**
+- [x] **Step 2: Update site docs**
 
 Update `docs/sites/twitter.md` so discovery says:
 
@@ -538,7 +538,7 @@ Update `docs/sites/twitter.md` so discovery says:
 この discovery は X の For You timeline そのものではなく、X API v2 recent search を使った query-based recommendation source として扱う。
 ```
 
-- [ ] **Step 3: Update README**
+- [x] **Step 3: Update README**
 
 Update the supported/recommend source docs to mention:
 
@@ -548,7 +548,7 @@ Update the supported/recommend source docs to mention:
 
 Also update the current `recommend all` source list to include `twitter`.
 
-- [ ] **Step 4: Run focused tests**
+- [x] **Step 4: Run focused tests**
 
 Run:
 
@@ -558,7 +558,7 @@ cargo test --locked sites::tests::resolves_twitter_aliases_and_recent_search_dis
 
 Expected: PASS.
 
-- [ ] **Step 5: Run full verification**
+- [x] **Step 5: Run full verification**
 
 Run:
 
@@ -570,7 +570,7 @@ cargo test --locked
 
 Expected: all commands exit 0.
 
-- [ ] **Step 6: Update Plane**
+- [x] **Step 6: Update Plane**
 
 Set ACS-75 to Done after the plan is committed. Set ACS-76 to Done when implementation passes focused tests. Set ACS-77 to Done after docs and full verification pass. Keep ACS-74 In Progress until all sub-issues are done, then set it to Done.
 
@@ -579,3 +579,4 @@ Set ACS-75 to Done after the plan is committed. Set ACS-76 to Done when implemen
 - Spec coverage: registry, config, token handling, X recent search collector, docs, and verification are covered.
 - Marker scan: no unfinished markers are used.
 - Type consistency: `SearchRequest::XRecentSearch`, `collect_x_recent_search`, `parse_x_recent_search_response`, and `x_bearer_token_from_env` are consistently named across tasks.
+
