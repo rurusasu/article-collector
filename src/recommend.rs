@@ -7,7 +7,8 @@ use serde_json::{json, Value};
 use slog::{info, warn, Logger};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 
 use crate::config::{RecommendConfig, RecommendSiteConfig};
 use crate::discovery::planner;
@@ -76,6 +77,7 @@ const MAX_LIMIT: usize = 100;
 const DEFAULT_LIMIT: usize = 30;
 const ALL_TARGET: &str = "all";
 const USER_AGENT: &str = concat!("article-collector/", env!("CARGO_PKG_VERSION"));
+const RECOMMEND_FETCH_CONCURRENCY: usize = 6;
 const RECOMMEND_TRANSLATION_CONCURRENCY: usize = 2;
 
 #[derive(Debug)]
@@ -313,61 +315,50 @@ async fn collect_recommended_articles(
     fs::create_dir_all(&articles_dir)?;
 
     let tasks = recommended_article_tasks(items);
-    let mut artifacts = Vec::new();
-    let mut failures = Vec::new();
+    let task_count = tasks.len();
     let mut translated_items = Vec::new();
-    let mut fetched_items = Vec::new();
-    let mut fetched_articles = Vec::new();
     let translation_configured = translation_agent_configured();
 
-    for task in tasks {
-        let fetched = match fetch::fetch_url_items(&task.url).await {
-            Ok(values) => values.into_iter().next().unwrap_or(Value::Null),
-            Err(error) => {
-                let stage = if fetch::is_pdf_url(&task.url) {
-                    "unsupported_pdf".to_string()
-                } else {
-                    "fetch".to_string()
-                };
-                failures.push(IndexedArticleFailure {
-                    index: task.index,
-                    failure: recommend_artifacts::ArticleFailure {
-                        url: task.url,
-                        title: task.title,
-                        stage,
-                        error: error.to_string(),
-                    },
+    let (fetched_articles, mut failures) = fetch_recommended_articles_ordered_with(
+        tasks,
+        articles_dir.clone(),
+        RECOMMEND_FETCH_CONCURRENCY,
+        |url| async move {
+            let values = fetch::fetch_url_items(&url).await?;
+            Ok(values.into_iter().next().unwrap_or(Value::Null))
+        },
+    )
+    .await?;
+    let fetched_items = fetched_articles
+        .iter()
+        .map(|article| article.item.clone())
+        .collect::<Vec<_>>();
+    let mut artifact_slots = vec![None; task_count];
+    let mut pending_translation_articles = Vec::new();
+
+    for article in fetched_articles {
+        if translation_configured {
+            if let Some(translated_path) = existing_translation_path(&articles_dir, &article.stem) {
+                translated_items.push(article.item.clone());
+                artifact_slots[article.index] = Some(recommend_artifacts::ArticleArtifact {
+                    item: article.item,
+                    json_path: article.json_path,
+                    translated_path: Some(translated_path),
                 });
                 continue;
             }
-        };
-
-        let article_body = article_body_from_fetched(&fetched);
-        let mut article = merge_recommendation_and_article(task.item, fetched);
-        if let Some(object) = article.as_object_mut() {
-            object.insert("article_content".to_string(), json!(article_body));
+            pending_translation_articles.push(article);
+        } else {
+            artifact_slots[article.index] = Some(recommend_artifacts::ArticleArtifact {
+                item: article.item,
+                json_path: article.json_path,
+                translated_path: None,
+            });
         }
-        let content = recommend_artifacts::format_article_content(&article);
-        if let Some(object) = article.as_object_mut() {
-            object.insert("content".to_string(), json!(content));
-        }
-
-        let json_path =
-            recommend_artifacts::write_article_json(&articles_dir, &task.stem, &article)?;
-        fetched_items.push(article.clone());
-        fetched_articles.push(FetchedRecommendedArticle {
-            index: task.index,
-            item: article,
-            url: task.url,
-            title: task.title,
-            stem: task.stem,
-            json_path,
-            content,
-        });
     }
 
     let translation_results = translate::translate_contents_ordered(
-        fetched_articles
+        pending_translation_articles
             .iter()
             .map(|article| article.content.clone())
             .collect(),
@@ -375,7 +366,10 @@ async fn collect_recommended_articles(
     )
     .await;
 
-    for (article, translation_result) in fetched_articles.into_iter().zip(translation_results) {
+    for (article, translation_result) in pending_translation_articles
+        .into_iter()
+        .zip(translation_results)
+    {
         let translated_path = match translation_result {
             Ok(translate::TranslateContentOutcome::Translated(markdown)) => {
                 let path = articles_dir.join(format!("{}_translated.md", article.stem));
@@ -398,12 +392,13 @@ async fn collect_recommended_articles(
             }
         };
 
-        artifacts.push(recommend_artifacts::ArticleArtifact {
+        artifact_slots[article.index] = Some(recommend_artifacts::ArticleArtifact {
             item: article.item,
             json_path: article.json_path,
             translated_path,
         });
     }
+    let artifacts = artifact_slots.into_iter().flatten().collect::<Vec<_>>();
 
     let failure_path = paths::recommend_fetch_failures_path();
     debug_assert_eq!(
@@ -480,6 +475,189 @@ fn recommended_article_tasks(items: Vec<Value>) -> Vec<RecommendedArticleTask> {
             }
         })
         .collect()
+}
+
+async fn fetch_recommended_articles_ordered_with<F, Fut>(
+    tasks: Vec<RecommendedArticleTask>,
+    articles_dir: PathBuf,
+    concurrency: usize,
+    fetcher: F,
+) -> Result<(Vec<FetchedRecommendedArticle>, Vec<IndexedArticleFailure>)>
+where
+    F: Fn(String) -> Fut + Clone + Send + Sync + 'static,
+    Fut: Future<Output = Result<Value>> + Send + 'static,
+{
+    if tasks.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let item_count = tasks.len();
+    let worker_count = concurrency.max(1).min(item_count);
+    let buckets = recommended_article_task_buckets(tasks, worker_count);
+    let mut handles = Vec::new();
+
+    for bucket in buckets {
+        let articles_dir = articles_dir.clone();
+        let fetcher = fetcher.clone();
+        handles.push(tokio::spawn(async move {
+            let mut results = Vec::with_capacity(bucket.len());
+            for task in bucket {
+                let index = task.index;
+                results.push((
+                    index,
+                    fetch_recommended_article_with(task, &articles_dir, fetcher.clone()).await,
+                ));
+            }
+            results
+        }));
+    }
+
+    let mut ordered = (0..item_count).map(|_| None).collect::<Vec<_>>();
+    for handle in handles {
+        for (index, result) in handle.await.context("article fetch worker failed")? {
+            ordered[index] = Some(result);
+        }
+    }
+
+    let mut articles = Vec::new();
+    let mut failures = Vec::new();
+    for result in ordered {
+        match result.context("article fetch worker did not return a result")? {
+            Ok(article) => articles.push(article),
+            Err(failure) => failures.push(failure),
+        }
+    }
+    Ok((articles, failures))
+}
+
+fn recommended_article_task_buckets(
+    tasks: Vec<RecommendedArticleTask>,
+    worker_count: usize,
+) -> Vec<Vec<RecommendedArticleTask>> {
+    let mut buckets = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
+    for (offset, task) in tasks.into_iter().enumerate() {
+        buckets[offset % worker_count].push(task);
+    }
+    buckets
+}
+
+async fn fetch_recommended_article_with<F, Fut>(
+    task: RecommendedArticleTask,
+    articles_dir: &Path,
+    fetcher: F,
+) -> std::result::Result<FetchedRecommendedArticle, IndexedArticleFailure>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = Result<Value>>,
+{
+    let json_path = articles_dir.join(format!("{}.json", task.stem));
+    match existing_article_json(&json_path) {
+        Ok(Some(article)) => {
+            return Ok(fetched_recommended_article_from_item(
+                task, article, json_path,
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(article_failure(task, "artifact", error.to_string()));
+        }
+    }
+
+    let fetched = match fetcher(task.url.clone()).await {
+        Ok(fetched) => fetched,
+        Err(error) => {
+            let stage = if fetch::is_pdf_url(&task.url) {
+                "unsupported_pdf"
+            } else {
+                "fetch"
+            };
+            return Err(article_failure(task, stage, error.to_string()));
+        }
+    };
+
+    let article_body = article_body_from_fetched(&fetched);
+    let mut article = merge_recommendation_and_article(task.item.clone(), fetched);
+    if let Some(object) = article.as_object_mut() {
+        object.insert("article_content".to_string(), json!(article_body));
+    }
+    let content = recommend_artifacts::format_article_content(&article);
+    if let Some(object) = article.as_object_mut() {
+        object.insert("content".to_string(), json!(content.clone()));
+    }
+
+    let json_path =
+        match recommend_artifacts::write_article_json(articles_dir, &task.stem, &article) {
+            Ok(path) => path,
+            Err(error) => {
+                return Err(article_failure(task, "artifact", error.to_string()));
+            }
+        };
+
+    Ok(FetchedRecommendedArticle {
+        index: task.index,
+        item: article,
+        url: task.url,
+        title: task.title,
+        stem: task.stem,
+        json_path,
+        content,
+    })
+}
+
+fn existing_article_json(path: &Path) -> Result<Option<Value>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let raw = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read existing article JSON {}", path.display()))?;
+    let article = serde_json::from_str(&raw)
+        .with_context(|| format!("Failed to parse existing article JSON {}", path.display()))?;
+    Ok(Some(article))
+}
+
+fn fetched_recommended_article_from_item(
+    task: RecommendedArticleTask,
+    article: Value,
+    json_path: PathBuf,
+) -> FetchedRecommendedArticle {
+    let content = article
+        .get("content")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| recommend_artifacts::format_article_content(&article));
+
+    FetchedRecommendedArticle {
+        index: task.index,
+        item: article,
+        url: task.url,
+        title: task.title,
+        stem: task.stem,
+        json_path,
+        content,
+    }
+}
+
+fn article_failure(
+    task: RecommendedArticleTask,
+    stage: &str,
+    error: String,
+) -> IndexedArticleFailure {
+    IndexedArticleFailure {
+        index: task.index,
+        failure: recommend_artifacts::ArticleFailure {
+            url: task.url,
+            title: task.title,
+            stage: stage.to_string(),
+            error,
+        },
+    }
+}
+
+fn existing_translation_path(articles_dir: &Path, stem: &str) -> Option<PathBuf> {
+    let path = articles_dir.join(format!("{stem}_translated.md"));
+    let content = fs::read_to_string(&path).ok()?;
+    (!content.trim().is_empty()).then_some(path)
 }
 
 fn ordered_failures(
@@ -2511,7 +2689,11 @@ mod tests {
     use slog::{Drain, KV};
     use std::collections::BTreeMap;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
+    use std::time::Duration;
 
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct CapturedLog {
@@ -2813,6 +2995,129 @@ mod tests {
         assert_eq!(
             translated[0].translated_path,
             PathBuf::from("recommended_articles/translated_translated.md")
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_recommended_articles_runs_with_bounded_concurrency_and_keeps_order() {
+        let articles_dir = temp_article_dir("fetch-pipeline-order");
+        let tasks = recommended_article_tasks(vec![
+            json!({
+                "title": "Slow",
+                "url": "https://example.com/slow",
+                "site": "test"
+            }),
+            json!({
+                "title": "Fast",
+                "url": "https://example.com/fast",
+                "site": "test"
+            }),
+            json!({
+                "title": "Medium",
+                "url": "https://example.com/medium",
+                "site": "test"
+            }),
+        ]);
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let (articles, failures) =
+            fetch_recommended_articles_ordered_with(tasks, articles_dir.clone(), 2, {
+                let active = Arc::clone(&active);
+                let max_active = Arc::clone(&max_active);
+                move |url| {
+                    let active = Arc::clone(&active);
+                    let max_active = Arc::clone(&max_active);
+                    async move {
+                        let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_active.fetch_max(now_active, Ordering::SeqCst);
+                        if url.ends_with("/slow") {
+                            tokio::time::sleep(Duration::from_millis(30)).await;
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(5)).await;
+                        }
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok(json!({
+                            "title": format!("Fetched {url}"),
+                            "url": url,
+                            "content": "Fetched body"
+                        }))
+                    }
+                }
+            })
+            .await
+            .unwrap();
+
+        assert!(failures.is_empty());
+        assert_eq!(max_active.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            articles
+                .iter()
+                .map(|article| article.index)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert!(articles_dir.join("001-test-slow.json").exists());
+        assert!(articles_dir.join("002-test-fast.json").exists());
+        assert!(articles_dir.join("003-test-medium.json").exists());
+    }
+
+    #[tokio::test]
+    async fn fetch_recommended_articles_reuses_existing_article_json() {
+        let articles_dir = temp_article_dir("fetch-pipeline-resume-json");
+        let tasks = recommended_article_tasks(vec![json!({
+            "title": "Cached",
+            "url": "https://example.com/cached",
+            "site": "test"
+        })]);
+        fs::create_dir_all(&articles_dir).unwrap();
+        fs::write(
+            articles_dir.join("001-test-cached.json"),
+            serde_json::to_string_pretty(&json!({
+                "title": "Cached",
+                "url": "https://example.com/cached",
+                "content": "Cached content"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let fetch_called = Arc::new(AtomicBool::new(false));
+
+        let (articles, failures) =
+            fetch_recommended_articles_ordered_with(tasks, articles_dir, 2, {
+                let fetch_called = Arc::clone(&fetch_called);
+                move |_url| {
+                    let fetch_called = Arc::clone(&fetch_called);
+                    async move {
+                        fetch_called.store(true, Ordering::SeqCst);
+                        Ok(json!({"content": "network"}))
+                    }
+                }
+            })
+            .await
+            .unwrap();
+
+        assert!(failures.is_empty());
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].content, "Cached content");
+        assert!(!fetch_called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn existing_translation_path_reuses_non_empty_markdown_only() {
+        let articles_dir = temp_article_dir("translation-resume");
+        fs::create_dir_all(&articles_dir).unwrap();
+        let translated_path = articles_dir.join("001-test-cached_translated.md");
+        fs::write(&translated_path, "翻訳済み本文").unwrap();
+        fs::write(articles_dir.join("002-test-empty_translated.md"), "   ").unwrap();
+
+        assert_eq!(
+            existing_translation_path(&articles_dir, "001-test-cached"),
+            Some(translated_path)
+        );
+        assert_eq!(
+            existing_translation_path(&articles_dir, "002-test-empty"),
+            None
         );
     }
 
@@ -3771,6 +4076,19 @@ mod tests {
             "article-collector-{name}-{}-{suffix}.sqlite",
             std::process::id()
         ))
+    }
+
+    fn temp_article_dir(name: &str) -> PathBuf {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!(
+                "article-collector-{name}-{}-{suffix}",
+                std::process::id()
+            ))
+            .join("recommended_articles")
     }
 
     /// 検証: registry に登録された全 recommend source から実際に記事を取得できる
