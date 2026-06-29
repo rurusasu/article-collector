@@ -184,7 +184,7 @@ fn clone_target_repo(target_repo: &str, target_dir: &Path) -> Result<()> {
         )
     })?;
 
-    let staging_dir = unique_sibling_path(target_dir, "clone");
+    let staging_dir = clone_staging_path(target_dir);
     let staging_dir_arg = staging_dir.to_string_lossy().to_string();
     let gh = gh_program();
     let clone_result = run_cmd(
@@ -229,6 +229,24 @@ fn quarantine_invalid_target_dir(target_dir: &Path) -> Result<PathBuf> {
         )
     })?;
     Ok(broken_dir)
+}
+
+fn clone_staging_path(target_dir: &Path) -> PathBuf {
+    let parent = target_dir.parent().unwrap_or_else(|| Path::new("."));
+    let pid = std::process::id();
+    let candidate = parent.join(format!(".c{pid}"));
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    for attempt in 1..100 {
+        let candidate = parent.join(format!(".c{pid}-{attempt}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    parent.join(format!(".c{pid}-fallback"))
 }
 
 fn unique_sibling_path(target_dir: &Path, label: &str) -> PathBuf {
@@ -511,6 +529,72 @@ mod tests {
         assert!(!is_valid_target_repo(&target_dir));
 
         let _ = fs::remove_dir_all(target_dir);
+    }
+
+    #[test]
+    fn clone_staging_path_uses_short_fixed_basename() {
+        let target_dir = normalized_temp_path("target-repo-short-clone");
+
+        let staging_dir = clone_staging_path(&target_dir);
+
+        assert_eq!(staging_dir.parent(), target_dir.parent());
+        assert_eq!(
+            staging_dir.file_name().unwrap(),
+            format!(".c{}", std::process::id()).as_str()
+        );
+        assert!(
+            staging_dir.to_string_lossy().len() < target_dir.to_string_lossy().len(),
+            "clone staging path should be shorter than final target path: staging={}, target={}",
+            staging_dir.display(),
+            target_dir.display()
+        );
+    }
+
+    #[test]
+    fn clone_staging_path_keeps_short_name_when_primary_staging_exists() {
+        let sandbox = normalized_temp_path("target-repo-short-clone-fallback");
+        let target_dir = sandbox.join("target-repo");
+        let primary_staging_dir = sandbox.join(format!(".c{}", std::process::id()));
+        let _ = fs::remove_dir_all(&sandbox);
+        fs::create_dir_all(&primary_staging_dir).unwrap();
+
+        let staging_dir = clone_staging_path(&target_dir);
+
+        assert_eq!(staging_dir.parent(), target_dir.parent());
+        assert_eq!(
+            staging_dir.file_name().unwrap(),
+            format!(".c{}-1", std::process::id()).as_str()
+        );
+        assert!(
+            staging_dir.to_string_lossy().len() < target_dir.to_string_lossy().len(),
+            "fallback clone staging path should stay short: staging={}, target={}",
+            staging_dir.display(),
+            target_dir.display()
+        );
+
+        let _ = fs::remove_dir_all(sandbox);
+    }
+
+    #[test]
+    fn clone_staging_path_keeps_observed_windows_pdf_path_under_max_path() {
+        const WINDOWS_MAX_PATH: usize = 260;
+        const RUN_DIR: &str = r"D:\lifelog\reports\article-collector\20260629T070027Z-news";
+        const PROBLEM_RELATIVE_PATH: &str = r"1_zettels\career\background\publications\Development of a hyper CLS data-based robotic interface for automation of production-line tasks using an articulated robot arm.pdf";
+
+        let target_path = format!(r"{RUN_DIR}\target-repo\{PROBLEM_RELATIVE_PATH}");
+        let old_staging_path =
+            format!(r"{RUN_DIR}\target-repo.clone-20260629101116123-12345\{PROBLEM_RELATIVE_PATH}");
+        let short_staging_path = format!(r"{RUN_DIR}\.c12345\{PROBLEM_RELATIVE_PATH}");
+        let short_fallback_path = format!(r"{RUN_DIR}\.c12345-1\{PROBLEM_RELATIVE_PATH}");
+
+        assert_eq!(target_path.len(), 242);
+        assert_eq!(old_staging_path.len(), 272);
+        assert_eq!(short_staging_path.len(), 238);
+        assert_eq!(short_fallback_path.len(), 240);
+        assert!(target_path.len() < WINDOWS_MAX_PATH);
+        assert!(old_staging_path.len() > WINDOWS_MAX_PATH);
+        assert!(short_staging_path.len() < WINDOWS_MAX_PATH);
+        assert!(short_fallback_path.len() < WINDOWS_MAX_PATH);
     }
 
     #[test]
