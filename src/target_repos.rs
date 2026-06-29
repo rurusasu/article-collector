@@ -1,8 +1,14 @@
 use anyhow::{bail, Context, Result};
 use chrono::Local;
+use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
+const GH_BIN_ENV: &str = "ARTICLE_COLLECTOR_GH_BIN";
+
+#[derive(Debug)]
 pub struct PreparedTargetRepo {
     pub target_dir: PathBuf,
     pub branch: String,
@@ -19,12 +25,14 @@ pub fn prepare_article_branch() -> Result<PreparedTargetRepo> {
     let target_dir = target_dir_from_env();
     let branch = article_branch_name();
 
-    if target_dir.join(".git").exists() {
+    if is_valid_target_repo(&target_dir) {
         run_git(&target_dir, &["checkout", "main"])?;
         run_git(&target_dir, &["pull", "origin", "main"])?;
     } else {
-        let target_dir_arg = target_dir.to_string_lossy().to_string();
-        run_cmd("gh", &["repo", "clone", &target_repo, &target_dir_arg])?;
+        if target_dir.exists() {
+            quarantine_invalid_target_dir(&target_dir)?;
+        }
+        clone_target_repo(&target_repo, &target_dir)?;
     }
 
     run_git(&target_dir, &["checkout", "-b", &branch])?;
@@ -128,14 +136,7 @@ fn ensure_non_main_branch(target_dir: &Path) -> Result<()> {
 }
 
 fn current_branch(target_dir: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .current_dir(target_dir)
-        .args(["branch", "--show-current"])
-        .output()
-        .context("git branch --show-current failed")?;
-    if !output.status.success() {
-        bail!("git branch --show-current failed with {}", output.status);
-    }
+    let output = run_output_in(target_dir, "git", &["branch", "--show-current"])?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -143,36 +144,254 @@ fn article_branch_name() -> String {
     format!("article/{}", Local::now().format("%Y-%m-%d-%H%M%S"))
 }
 
+fn is_valid_target_repo(target_dir: &Path) -> bool {
+    if !target_dir.join(".git").exists() {
+        return false;
+    }
+
+    let Ok(output) = run_output_in_with_timeout(
+        target_dir,
+        "git",
+        &["rev-parse", "--is-inside-work-tree"],
+        health_check_timeout(),
+    ) else {
+        return false;
+    };
+    if String::from_utf8_lossy(&output.stdout).trim() != "true" {
+        return false;
+    }
+
+    run_cmd_in_with_timeout(
+        target_dir,
+        "git",
+        &["status", "--porcelain"],
+        health_check_timeout(),
+    )
+    .is_ok()
+}
+
+fn clone_target_repo(target_repo: &str, target_dir: &Path) -> Result<()> {
+    let parent = target_dir.parent().with_context(|| {
+        format!(
+            "Target repo path {} does not have a parent directory",
+            target_dir.display()
+        )
+    })?;
+    fs::create_dir_all(parent).with_context(|| {
+        format!(
+            "Failed to create target repo parent directory {}",
+            parent.display()
+        )
+    })?;
+
+    let staging_dir = unique_sibling_path(target_dir, "clone");
+    let staging_dir_arg = staging_dir.to_string_lossy().to_string();
+    let gh = gh_program();
+    let clone_result = run_cmd(
+        &gh,
+        &["repo", "clone", target_repo, staging_dir_arg.as_str()],
+    );
+    if let Err(error) = clone_result {
+        remove_dir_all_if_exists(&staging_dir)?;
+        return Err(error).with_context(|| {
+            format!(
+                "gh repo clone {target_repo} {} failed",
+                staging_dir.display()
+            )
+        });
+    }
+
+    if !is_valid_target_repo(&staging_dir) {
+        remove_dir_all_if_exists(&staging_dir)?;
+        bail!(
+            "gh repo clone {target_repo} {} did not create a valid git work tree",
+            staging_dir.display()
+        );
+    }
+
+    fs::rename(&staging_dir, target_dir).with_context(|| {
+        format!(
+            "Failed to promote cloned target repo from {} to {}",
+            staging_dir.display(),
+            target_dir.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn quarantine_invalid_target_dir(target_dir: &Path) -> Result<PathBuf> {
+    let broken_dir = unique_sibling_path(target_dir, "broken");
+    fs::rename(target_dir, &broken_dir).with_context(|| {
+        format!(
+            "Failed to quarantine invalid target repo {} to {}",
+            target_dir.display(),
+            broken_dir.display()
+        )
+    })?;
+    Ok(broken_dir)
+}
+
+fn unique_sibling_path(target_dir: &Path, label: &str) -> PathBuf {
+    let parent = target_dir.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = target_dir
+        .file_name()
+        .map(|value| value.to_string_lossy())
+        .unwrap_or_else(|| "target-repo".into());
+    let stamp = Local::now().format("%Y%m%d%H%M%S%3f");
+    let pid = std::process::id();
+
+    for attempt in 0..100 {
+        let suffix = if attempt == 0 {
+            format!("{label}-{stamp}-{pid}")
+        } else {
+            format!("{label}-{stamp}-{pid}-{attempt}")
+        };
+        let candidate = parent.join(format!("{file_name}.{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    parent.join(format!("{file_name}.{label}-{stamp}-{pid}-fallback"))
+}
+
+fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            Err(error).with_context(|| format!("Failed to remove directory {}", path.display()))
+        }
+    }
+}
+
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
     run_cmd_in(dir, "git", args)
 }
 
 fn run_git_owned(dir: &Path, args: &[String]) -> Result<()> {
-    run_cmd_in_owned(dir, "git", args)
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_cmd_in(dir, "git", &arg_refs)
 }
 
 fn run_cmd(cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
+    run_cmd_with_timeout(cmd, args, command_timeout())
 }
 
 fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(cmd).current_dir(dir).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
-    }
-    Ok(())
+    run_cmd_in_with_timeout(dir, cmd, args, command_timeout())
 }
 
-fn run_cmd_in_owned(dir: &Path, cmd: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(cmd).current_dir(dir).args(args).status()?;
-    if !status.success() {
-        bail!("{cmd} {} failed with {status}", args.join(" "));
+fn run_output_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<Output> {
+    run_output_in_with_timeout(dir, cmd, args, command_timeout())
+}
+
+fn run_cmd_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> Result<()> {
+    let mut command = Command::new(cmd);
+    command.args(args);
+    wait_for_status(command, command_display(cmd, args), timeout)
+}
+
+fn run_cmd_in_with_timeout(dir: &Path, cmd: &str, args: &[&str], timeout: Duration) -> Result<()> {
+    let mut command = Command::new(cmd);
+    command.current_dir(dir).args(args);
+    wait_for_status(command, command_display(cmd, args), timeout)
+}
+
+fn run_output_in_with_timeout(
+    dir: &Path,
+    cmd: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<Output> {
+    let mut command = Command::new(cmd);
+    command
+        .current_dir(dir)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    wait_for_output(command, command_display(cmd, args), timeout)
+}
+
+fn wait_for_status(mut command: Command, display: String, timeout: Duration) -> Result<()> {
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Failed to run command: {display}"))?;
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("Failed to poll command: {display}"))?
+        {
+            if status.success() {
+                return Ok(());
+            }
+            bail!("{display} failed with {status}");
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{display} timed out after {}", format_duration(timeout));
+        }
+
+        thread::sleep(Duration::from_millis(25));
     }
-    Ok(())
+}
+
+fn wait_for_output(mut command: Command, display: String, timeout: Duration) -> Result<Output> {
+    let mut child = command
+        .spawn()
+        .with_context(|| format!("Failed to run command: {display}"))?;
+    let started_at = Instant::now();
+
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .with_context(|| format!("Failed to poll command: {display}"))?
+        {
+            let output = child
+                .wait_with_output()
+                .with_context(|| format!("Failed to read command output: {display}"))?;
+            if status.success() {
+                return Ok(output);
+            }
+            bail!("{display} failed with {status}");
+        }
+
+        if started_at.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("{display} timed out after {}", format_duration(timeout));
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn command_timeout() -> Duration {
+    Duration::from_secs(300)
+}
+
+fn health_check_timeout() -> Duration {
+    Duration::from_secs(10)
+}
+
+fn command_display(cmd: &str, args: &[&str]) -> String {
+    if args.is_empty() {
+        cmd.to_string()
+    } else {
+        format!("{cmd} {}", args.join(" "))
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    if duration.as_secs() > 0 {
+        format!("{}s", duration.as_secs())
+    } else {
+        format!("{}ms", duration.as_millis())
+    }
 }
 
 fn commit_push_and_create_pr(
@@ -197,20 +416,29 @@ fn commit_push_and_create_pr(
 
     run_cmd_in(
         target_dir,
-        "gh",
+        &gh_program(),
         &["pr", "create", "--title", pr_title, "--body", pr_body],
     )?;
 
     if std::env::var("AUTO_MERGE").unwrap_or_else(|_| "true".to_string()) == "true" {
-        run_cmd_in(target_dir, "gh", &["pr", "merge", "--merge"])?;
+        run_cmd_in(target_dir, &gh_program(), &["pr", "merge", "--merge"])?;
     }
 
     Ok(())
 }
 
+fn gh_program() -> String {
+    std::env::var(GH_BIN_ENV).unwrap_or_else(|_| "gh".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resolves_relative_path_under_target_dir() {
@@ -274,7 +502,128 @@ mod tests {
         assert_eq!(error.to_string(), "No paths supplied for PR creation");
     }
 
+    #[test]
+    fn invalid_git_marker_is_not_reused_as_target_repo() {
+        let target_dir = normalized_temp_path("target-repo-invalid-marker");
+        let _ = fs::remove_dir_all(&target_dir);
+        fs::create_dir_all(target_dir.join(".git")).unwrap();
+
+        assert!(!is_valid_target_repo(&target_dir));
+
+        let _ = fs::remove_dir_all(target_dir);
+    }
+
+    #[test]
+    fn failed_clone_cleans_staging_dir_and_quarantines_invalid_target() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let sandbox = normalized_temp_path("target-repo-failed-clone");
+        let target_dir = sandbox.join("target-repo");
+        let bin_dir = sandbox.join("bin");
+        let _ = fs::remove_dir_all(&sandbox);
+        fs::create_dir_all(target_dir.join(".git")).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fake_gh = write_fake_gh_clone_failure(&bin_dir);
+
+        let previous_path = std::env::var_os("PATH");
+        let previous_gh_bin = std::env::var_os(GH_BIN_ENV);
+        std::env::set_var("PATH", prepend_path(&bin_dir, previous_path.as_ref()));
+        std::env::set_var(GH_BIN_ENV, &fake_gh);
+        std::env::set_var("TARGET_REPO", "rurusasu/lifelog");
+        std::env::set_var("TARGET_DIR", &target_dir);
+
+        let error = prepare_article_branch().unwrap_err();
+
+        assert!(
+            error.to_string().contains("gh repo clone"),
+            "unexpected error: {error:#}"
+        );
+        assert!(
+            !target_dir.exists(),
+            "invalid target dir should be moved away before clone retry"
+        );
+        let entries = fs::read_dir(&sandbox)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            entries
+                .iter()
+                .any(|name| name.starts_with("target-repo.broken-")),
+            "broken target dir should be quarantined, entries: {entries:?}"
+        );
+        assert!(
+            entries.iter().all(|name| !name.contains(".clone-")),
+            "failed clone staging dirs should be cleaned up, entries: {entries:?}"
+        );
+
+        restore_env("PATH", previous_path);
+        restore_env(GH_BIN_ENV, previous_gh_bin);
+        std::env::remove_var("TARGET_REPO");
+        std::env::remove_var("TARGET_DIR");
+        let _ = fs::remove_dir_all(sandbox);
+    }
+
+    #[test]
+    fn external_command_times_out_instead_of_hanging() {
+        let result = if cfg!(windows) {
+            run_cmd_with_timeout(
+                "powershell",
+                &["-NoProfile", "-Command", "Start-Sleep -Seconds 5"],
+                Duration::from_millis(50),
+            )
+        } else {
+            run_cmd_with_timeout("sh", &["-c", "sleep 5"], Duration::from_millis(50))
+        };
+
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error:#}"
+        );
+    }
+
     fn normalized_temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("article-collector-{name}-{}", std::process::id()))
+    }
+
+    fn write_fake_gh_clone_failure(bin_dir: &Path) -> PathBuf {
+        if cfg!(windows) {
+            let path = bin_dir.join("gh.cmd");
+            fs::write(
+                &path,
+                "@echo off\r\nmkdir \"%4\\.git\" 2>nul\r\nexit /b 1\r\n",
+            )
+            .unwrap();
+            path
+        } else {
+            let path = bin_dir.join("gh");
+            fs::write(&path, "#!/usr/bin/env sh\nmkdir -p \"$4/.git\"\nexit 1\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut permissions = fs::metadata(&path).unwrap().permissions();
+                permissions.set_mode(0o755);
+                fs::set_permissions(&path, permissions).unwrap();
+            }
+            path
+        }
+    }
+
+    fn prepend_path(
+        bin_dir: &Path,
+        previous_path: Option<&std::ffi::OsString>,
+    ) -> std::ffi::OsString {
+        let mut paths = vec![bin_dir.to_path_buf()];
+        if let Some(previous_path) = previous_path {
+            paths.extend(std::env::split_paths(previous_path));
+        }
+        std::env::join_paths(paths).unwrap()
+    }
+
+    fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
     }
 }
