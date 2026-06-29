@@ -922,6 +922,119 @@ fn devto_article_to_recommendation(data: &Value) -> Option<Value> {
     }))
 }
 
+fn build_qiita_items_url(api_url: &str, query: &str, limit: usize) -> Result<Url> {
+    let mut url = Url::parse(api_url)?;
+    url.query_pairs_mut()
+        .append_pair("page", "1")
+        .append_pair("per_page", &limit.to_string())
+        .append_pair("query", query);
+    Ok(url)
+}
+
+fn parse_qiita_items_response(response: &Value, limit: usize) -> Result<Vec<Value>> {
+    let items = response
+        .as_array()
+        .context("Qiita items response should be a JSON array")?;
+    Ok(items
+        .iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(index, item)| qiita_item_to_recommendation(item, index + 1))
+        .collect())
+}
+
+fn qiita_item_to_recommendation(item: &Value, rank: usize) -> Option<Value> {
+    let url = item.get("url").and_then(Value::as_str)?;
+    let title = item
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or("Untitled");
+    let content = item
+        .get("body")
+        .or_else(|| item.get("rendered_body"))
+        .and_then(Value::as_str)
+        .unwrap_or(title);
+    let user = item.get("user");
+    let username = user
+        .and_then(|user| user.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let author = user
+        .and_then(|user| user.get("name"))
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(username);
+
+    let mut recommendation = json!({
+        "source": "qiita",
+        "site": "qiita",
+        "rank": rank,
+        "title": title,
+        "url": url,
+        "content": content,
+        "tags": qiita_tags(item)
+    });
+
+    if let Some(object) = recommendation.as_object_mut() {
+        if !author.is_empty() {
+            object.insert("author".to_string(), json!(author));
+        }
+        if !username.is_empty() {
+            object.insert("username".to_string(), json!(username));
+        }
+        if let Some(likes) = item.get("likes_count").and_then(Value::as_u64) {
+            object.insert("likes_count".to_string(), json!(likes));
+        }
+        if let Some(created_at) = item.get("created_at").and_then(Value::as_str) {
+            object.insert("created_at".to_string(), json!(created_at));
+        }
+        if let Some(updated_at) = item.get("updated_at").and_then(Value::as_str) {
+            object.insert("updated_at".to_string(), json!(updated_at));
+        }
+    }
+
+    Some(recommendation)
+}
+
+fn qiita_tags(item: &Value) -> Vec<String> {
+    item.get("tags")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tag| tag.get("name").and_then(Value::as_str))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+async fn collect_qiita_items(api_url: &str, query: &str, limit: usize) -> Result<Vec<Value>> {
+    let url = build_qiita_items_url(api_url, query, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch Qiita items from {api_url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "Qiita items search failed with HTTP status {status}. Response: {}",
+            body.chars().take(500).collect::<String>()
+        );
+    }
+
+    let value: Value = response
+        .json()
+        .await
+        .context("Failed to parse Qiita items response")?;
+    parse_qiita_items_response(&value, limit)
+}
+
 async fn collect_github_advisories(api_url: &str, limit: usize) -> Result<Vec<Value>> {
     let url = build_github_advisories_url(api_url, limit)?;
     let client = reqwest::Client::builder()
@@ -2551,6 +2664,18 @@ async fn collect_source(
             let token = x_bearer_token()?;
             collect_x_recent_search(api_url, query, limit, &token).await?
         }
+        DiscoveryEndpoint::SearchApi {
+            api_url,
+            default_query,
+            request: SearchRequest::QiitaItems,
+        } => {
+            collect_qiita_items(
+                api_url,
+                query_override_or_default(query, required_default_query(site_name, default_query)?),
+                limit,
+            )
+            .await?
+        }
         DiscoveryEndpoint::SearchApi { .. } => {
             bail!("No search API discovery collector registered for site '{site_name}'")
         }
@@ -3375,6 +3500,74 @@ mod tests {
     }
 
     #[test]
+    fn builds_qiita_items_url_with_query_and_limit() {
+        let url =
+            build_qiita_items_url("https://qiita.com/api/v2/items", "Rust tag:rust", 3).unwrap();
+
+        assert_eq!(url.host_str(), Some("qiita.com"));
+        assert!(url.as_str().contains("page=1"));
+        assert!(url.as_str().contains("per_page=3"));
+        assert!(url.as_str().contains("query=Rust+tag%3Arust"));
+    }
+
+    #[test]
+    fn normalizes_qiita_items_response() {
+        let response = json!([
+            {
+                "title": "Rust async testing",
+                "url": "https://qiita.com/alice/items/abcdef",
+                "body": "# Rust async testing",
+                "rendered_body": "<h1>Rust async testing</h1>",
+                "likes_count": 42,
+                "created_at": "2026-06-29T00:00:00+09:00",
+                "updated_at": "2026-06-29T01:00:00+09:00",
+                "tags": [{"name": "Rust"}, {"name": "Tokio"}],
+                "user": {"id": "alice", "name": "Alice Example"}
+            }
+        ]);
+
+        let items = parse_qiita_items_response(&response, 10).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "qiita");
+        assert_eq!(items[0]["site"], "qiita");
+        assert_eq!(items[0]["title"], "Rust async testing");
+        assert_eq!(items[0]["url"], "https://qiita.com/alice/items/abcdef");
+        assert_eq!(items[0]["author"], "Alice Example");
+        assert_eq!(items[0]["username"], "alice");
+        assert_eq!(items[0]["tags"][0], "Rust");
+        assert_eq!(items[0]["tags"][1], "Tokio");
+        assert_eq!(items[0]["likes_count"], 42);
+    }
+
+    #[tokio::test]
+    async fn collect_qiita_items_sends_query_and_limit() {
+        let api_url = serve_qiita_items_api(
+            200,
+            r#"[{"title":"Rust example","url":"https://qiita.com/a/items/1","body":"body"}]"#,
+        )
+        .await;
+
+        let items = collect_qiita_items(&api_url, "Rust tag:rust", 3)
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["site"], "qiita");
+        assert_eq!(items[0]["url"], "https://qiita.com/a/items/1");
+    }
+
+    #[tokio::test]
+    async fn collect_qiita_items_reports_http_errors() {
+        let api_url = serve_qiita_items_api(429, r#"{"message":"rate limited"}"#).await;
+
+        let error = collect_qiita_items(&api_url, "Rust", 3).await.unwrap_err();
+
+        assert!(error.to_string().contains("Qiita items search failed"));
+        assert!(error.to_string().contains("429"));
+    }
+
+    #[test]
     fn reports_missing_x_bearer_token() {
         let error = x_bearer_token_from_env(|_| None).unwrap_err();
 
@@ -4128,6 +4321,40 @@ mod tests {
             assert!(lower_request.contains("authorization: bearer token-123"));
             assert!(request.contains("tweet.fields="));
             assert!(request.contains("expansions=author_id"));
+            let reason = if status == 200 {
+                "OK"
+            } else {
+                "Too Many Requests"
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}")
+    }
+
+    async fn serve_qiita_items_api(status: u16, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buffer = [0_u8; 4096];
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let bytes_read = socket.read(&mut request_buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&request_buffer[..bytes_read]).to_string();
+            assert!(request.starts_with("GET /?"));
+            assert!(request.contains("page=1"));
+            assert!(request.contains("per_page=3"));
+            assert!(request.contains("query=Rust"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("user-agent: article-collector/"));
             let reason = if status == 200 {
                 "OK"
             } else {
