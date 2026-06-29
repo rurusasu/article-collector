@@ -4,6 +4,8 @@ sources = [
   "devto",
   "zenn",
   "twitter",
+  "qiita",
+  "bluesky",
   "arxiv",
   "github-advisory",
   "cisa-kev",
@@ -29,6 +31,14 @@ query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs
 [recommend.source.twitter]
 limit = 10
 query = "(AI OR Rust OR security) lang:en -is:retweet"
+
+[recommend.source.qiita]
+limit = 10
+query = "AI OR Rust OR security"
+
+[recommend.source.bluesky]
+limit = 10
+query = "AI OR Rust OR security"
 
 [recommend.source.github-advisory]
 limit = 10

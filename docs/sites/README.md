@@ -17,6 +17,8 @@
 | Dev.to | [devto.md](devto.md) |
 | Zenn | [zenn.md](zenn.md) |
 | X/Twitter | [twitter.md](twitter.md) |
+| Qiita | [qiita.md](qiita.md) |
+| Bluesky | [bluesky.md](bluesky.md) |
 | YouTube | [youtube.md](youtube.md) |
 | arXiv | [arxiv.md](arxiv.md) |
 | GitHub Advisory | [github-advisory.md](github-advisory.md) |
