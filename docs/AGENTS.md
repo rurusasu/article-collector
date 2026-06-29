@@ -17,7 +17,9 @@
 | [sites/hackernews.md](sites/hackernews.md) | `hackernews` | `DiscoveryEndpoint::JsonApi` | `FetchRoute::SiteArticleApi` | top story ID を discovery し、item JSON から外部記事 URL を得る。 |
 | [sites/devto.md](sites/devto.md) | `devto` | `DiscoveryEndpoint::JsonApi` | `FetchRoute::SiteArticleApi` | public API から記事 metadata と直接記事 URL を得る。 |
 | [sites/zenn.md](sites/zenn.md) | `zenn` | `DiscoveryEndpoint::RssFeed` | `FetchRoute::GenericWeb` | Zenn feed から記事候補を得て、ページは generic web fetch で取得する。 |
-| [sites/twitter.md](sites/twitter.md) | `twitter` | なし | `FetchRoute::SocialStatus` | status URL の直接 fetch のみ対応する。 |
+| [sites/twitter.md](sites/twitter.md) | `twitter` | `DiscoveryEndpoint::SearchApi` | `FetchRoute::SocialStatus` | X API v2 recent search で post 候補を得て、status URL は social status fetch で扱う。 |
+| [sites/qiita.md](sites/qiita.md) | `qiita` | `DiscoveryEndpoint::SearchApi` | `FetchRoute::GenericWeb` | Qiita API v2 items search から技術記事候補を得る。 |
+| [sites/bluesky.md](sites/bluesky.md) | `bluesky` | `DiscoveryEndpoint::SearchApi` | `FetchRoute::GenericWeb` | public AppView searchPosts から post URL を得る。 |
 | [sites/youtube.md](sites/youtube.md) | `youtube` | なし | `FetchRoute::VideoTranscript` | video URL の直接 fetch のみ対応する。将来の channel discovery はこの site に追加する。 |
 | [sites/arxiv.md](sites/arxiv.md) | `arxiv` | `DiscoveryEndpoint::SearchApi` | `FetchRoute::GenericWeb` | `SearchRequest::ArxivSearch` を使う paper discovery endpoint。 |
 | [sites/github-advisory.md](sites/github-advisory.md) | `github-advisory` | `DiscoveryEndpoint::JsonApi` | `FetchRoute::GenericWeb` | GHSA/CVE metadata を持つ security advisory discovery。 |
