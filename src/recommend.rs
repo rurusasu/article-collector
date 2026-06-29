@@ -1035,6 +1035,140 @@ async fn collect_qiita_items(api_url: &str, query: &str, limit: usize) -> Result
     parse_qiita_items_response(&value, limit)
 }
 
+fn build_bluesky_search_posts_url(api_url: &str, query: &str, limit: usize) -> Result<Url> {
+    let mut url = Url::parse(api_url)?;
+    url.query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("limit", &limit.to_string())
+        .append_pair("sort", "latest");
+    Ok(url)
+}
+
+fn parse_bluesky_search_posts_response(response: &Value, limit: usize) -> Result<Vec<Value>> {
+    let posts = response
+        .get("posts")
+        .and_then(Value::as_array)
+        .context("Bluesky searchPosts response should contain a posts array")?;
+    Ok(posts
+        .iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(index, post)| bluesky_post_to_recommendation(post, index + 1))
+        .collect())
+}
+
+fn bluesky_post_to_recommendation(post: &Value, rank: usize) -> Option<Value> {
+    let uri = post.get("uri").and_then(Value::as_str)?;
+    let rkey = bluesky_rkey_from_uri(uri)?;
+    let author = post.get("author")?;
+    let handle = author.get("handle").and_then(Value::as_str)?;
+    let did = author.get("did").and_then(Value::as_str).unwrap_or("");
+    let display_name = author
+        .get("displayName")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(handle);
+    let text = post
+        .get("record")
+        .and_then(|record| record.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let created_at = post
+        .get("record")
+        .and_then(|record| record.get("createdAt"))
+        .and_then(Value::as_str);
+    let title = social_text_title(text, "Bluesky post", &rkey);
+    let url = format!("https://bsky.app/profile/{handle}/post/{rkey}");
+
+    let mut recommendation = json!({
+        "source": "bluesky",
+        "site": "bluesky",
+        "rank": rank,
+        "title": title,
+        "url": url,
+        "content": text,
+        "author": display_name,
+        "handle": handle
+    });
+
+    if let Some(object) = recommendation.as_object_mut() {
+        if !did.is_empty() {
+            object.insert("did".to_string(), json!(did));
+        }
+        if let Some(created_at) = created_at {
+            object.insert("created_at".to_string(), json!(created_at));
+        }
+        copy_u64_field(post, object, "likeCount", "like_count");
+        copy_u64_field(post, object, "repostCount", "repost_count");
+        copy_u64_field(post, object, "replyCount", "reply_count");
+    }
+
+    Some(recommendation)
+}
+
+fn bluesky_rkey_from_uri(uri: &str) -> Option<String> {
+    uri.rsplit('/')
+        .next()
+        .filter(|rkey| !rkey.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn social_text_title(text: &str, fallback_prefix: &str, fallback_id: &str) -> String {
+    let first_line = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("");
+    let title = first_line.chars().take(80).collect::<String>();
+    if title.trim().is_empty() {
+        format!("{fallback_prefix} {fallback_id}")
+    } else {
+        title
+    }
+}
+
+fn copy_u64_field(
+    source: &Value,
+    object: &mut serde_json::Map<String, Value>,
+    source_name: &str,
+    target_name: &str,
+) {
+    if let Some(value) = source.get(source_name).and_then(Value::as_u64) {
+        object.insert(target_name.to_string(), json!(value));
+    }
+}
+
+async fn collect_bluesky_search_posts(
+    api_url: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let url = build_bluesky_search_posts_url(api_url, query, limit)?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(USER_AGENT)
+        .build()?;
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .with_context(|| format!("Failed to fetch Bluesky searchPosts from {api_url}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        bail!(
+            "Bluesky searchPosts failed with HTTP status {status}. Response: {}",
+            body.chars().take(500).collect::<String>()
+        );
+    }
+
+    let value: Value = response
+        .json()
+        .await
+        .context("Failed to parse Bluesky searchPosts response")?;
+    parse_bluesky_search_posts_response(&value, limit)
+}
+
 async fn collect_github_advisories(api_url: &str, limit: usize) -> Result<Vec<Value>> {
     let url = build_github_advisories_url(api_url, limit)?;
     let client = reqwest::Client::builder()
@@ -1928,16 +2062,7 @@ fn x_tweet_url(username: Option<&str>, tweet_id: &str) -> String {
 }
 
 fn x_tweet_title(text: &str, tweet_id: &str) -> String {
-    let first_line = text
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
-    let title = first_line.chars().take(80).collect::<String>();
-    if title.trim().is_empty() {
-        format!("X post {tweet_id}")
-    } else {
-        title
-    }
+    social_text_title(text, "X post", tweet_id)
 }
 
 async fn collect_arxiv_search(api_url: &str, query: &str, limit: usize) -> Result<Vec<Value>> {
@@ -2670,6 +2795,18 @@ async fn collect_source(
             request: SearchRequest::QiitaItems,
         } => {
             collect_qiita_items(
+                api_url,
+                query_override_or_default(query, required_default_query(site_name, default_query)?),
+                limit,
+            )
+            .await?
+        }
+        DiscoveryEndpoint::SearchApi {
+            api_url,
+            default_query,
+            request: SearchRequest::BlueskySearchPosts,
+        } => {
+            collect_bluesky_search_posts(
                 api_url,
                 query_override_or_default(query, required_default_query(site_name, default_query)?),
                 limit,
@@ -3568,6 +3705,88 @@ mod tests {
     }
 
     #[test]
+    fn builds_bluesky_search_posts_url_with_query_and_limit() {
+        let url = build_bluesky_search_posts_url(
+            "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts",
+            "atproto rust",
+            4,
+        )
+        .unwrap();
+
+        assert_eq!(url.host_str(), Some("public.api.bsky.app"));
+        assert!(url.as_str().contains("q=atproto+rust"));
+        assert!(url.as_str().contains("limit=4"));
+        assert!(url.as_str().contains("sort=latest"));
+    }
+
+    #[test]
+    fn normalizes_bluesky_search_posts_response() {
+        let response = json!({
+            "posts": [{
+                "uri": "at://did:plc:abc/app.bsky.feed.post/3lxyz",
+                "author": {
+                    "did": "did:plc:abc",
+                    "handle": "alice.bsky.social",
+                    "displayName": "Alice Example"
+                },
+                "record": {
+                    "text": "Rust and AT Protocol notes\nSecond line",
+                    "createdAt": "2026-06-29T00:00:00.000Z"
+                },
+                "likeCount": 12,
+                "repostCount": 3,
+                "replyCount": 2
+            }]
+        });
+
+        let items = parse_bluesky_search_posts_response(&response, 10).unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["source"], "bluesky");
+        assert_eq!(items[0]["site"], "bluesky");
+        assert_eq!(items[0]["title"], "Rust and AT Protocol notes");
+        assert_eq!(
+            items[0]["url"],
+            "https://bsky.app/profile/alice.bsky.social/post/3lxyz"
+        );
+        assert_eq!(items[0]["author"], "Alice Example");
+        assert_eq!(items[0]["handle"], "alice.bsky.social");
+        assert_eq!(items[0]["did"], "did:plc:abc");
+        assert_eq!(items[0]["like_count"], 12);
+    }
+
+    #[tokio::test]
+    async fn collect_bluesky_search_posts_sends_query_limit_and_sort() {
+        let api_url = serve_bluesky_search_posts_api(
+            200,
+            r#"{"posts":[{"uri":"at://did:plc:abc/app.bsky.feed.post/3lxyz","author":{"did":"did:plc:abc","handle":"alice.bsky.social"},"record":{"text":"ATProto example"}}]}"#,
+        )
+        .await;
+
+        let items = collect_bluesky_search_posts(&api_url, "atproto rust", 4)
+            .await
+            .unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["url"],
+            "https://bsky.app/profile/alice.bsky.social/post/3lxyz"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_bluesky_search_posts_reports_http_errors() {
+        let api_url = serve_bluesky_search_posts_api(429, r#"{"error":"RateLimit"}"#).await;
+
+        let error = collect_bluesky_search_posts(&api_url, "atproto", 4)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("Bluesky searchPosts failed"));
+        assert!(error.to_string().contains("429"));
+    }
+
+    #[test]
     fn reports_missing_x_bearer_token() {
         let error = x_bearer_token_from_env(|_| None).unwrap_err();
 
@@ -4352,6 +4571,40 @@ mod tests {
             assert!(request.contains("page=1"));
             assert!(request.contains("per_page=3"));
             assert!(request.contains("query=Rust"));
+            assert!(request
+                .to_ascii_lowercase()
+                .contains("user-agent: article-collector/"));
+            let reason = if status == 200 {
+                "OK"
+            } else {
+                "Too Many Requests"
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        format!("http://{address}")
+    }
+
+    async fn serve_bluesky_search_posts_api(status: u16, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request_buffer = [0_u8; 4096];
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let bytes_read = socket.read(&mut request_buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&request_buffer[..bytes_read]).to_string();
+            assert!(request.starts_with("GET /?"));
+            assert!(request.contains("q=atproto"));
+            assert!(request.contains("limit=4"));
+            assert!(request.contains("sort=latest"));
             assert!(request
                 .to_ascii_lowercase()
                 .contains("user-agent: article-collector/"));
