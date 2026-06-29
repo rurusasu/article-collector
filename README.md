@@ -222,7 +222,7 @@ article-collector recommend all --config article-collector.toml
 
 `[recommend].create_pr = true` は `[recommend].fetch_articles = true` が必須。翻訳済み記事が 0 件の場合、target repo の clone / branch 作成前に非ゼロ終了する。PR には `recommended_articles/*_translated.md` ではなく、target repo の `SAVE_PATH_TEMPLATE` に従って保存した Markdown 記事ファイルをすべて含める。
 
-PR 作成用の target repo は `TARGET_DIR` を再利用する前に git work tree として検証する。壊れた `.git` だけが残っている場合など、既存 `TARGET_DIR` が無効な場合は `TARGET_DIR.broken-*` に退避してから再 clone する。clone は `TARGET_DIR.clone-*` の staging directory に作成し、有効な git work tree と確認できた場合だけ `TARGET_DIR` に昇格する。`git` / `gh` の外部コマンドは 5 分で timeout し、失敗時は非ゼロ終了のまま扱う。
+PR 作成用の target repo は `TARGET_DIR` を再利用する前に git work tree として検証する。壊れた `.git` だけが残っている場合など、既存 `TARGET_DIR` が無効な場合は `TARGET_DIR.broken-*` に退避してから再 clone する。clone は sibling の短い process-specific staging directory（通常は `.c<PID>`、既存なら `.c<PID>-N`）に作成し、有効な git work tree と確認できた場合だけ `TARGET_DIR` に昇格する。`git` / `gh` の外部コマンドは 5 分で timeout し、失敗時は非ゼロ終了のまま扱う。
 
 収集・翻訳中の一時ディレクトリと最終成果物の保存先を分ける場合は、`ARTICLE_COLLECTOR_TEMP_DIR` を temporary directory として使い、`ARTICLE_COLLECTOR_OUTPUT_DIR` に最終成果物の保存先を指定する。`ARTICLE_COLLECTOR_OUTPUT_DIR` が設定されている場合、保存ステップ後に target repo 内の `*-news` directory 配下を走査し、`.md` files のみを相対パスを保って最終成果物ディレクトリへコピーする。JSON など Markdown 以外の files や `*-news` 以外の directory はコピーしない。
 
