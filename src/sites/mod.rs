@@ -1,6 +1,7 @@
 pub mod arxiv;
 pub mod aws_security;
 pub mod aws_whatsnew;
+pub mod bluesky;
 pub mod cisa_kev;
 pub mod cncf;
 pub mod devto;
@@ -14,6 +15,7 @@ pub mod kubernetes;
 pub mod martinfowler;
 pub mod nvd;
 pub mod openreview;
+pub mod qiita;
 mod registry;
 pub mod thoughtworks_radar;
 pub mod twitter;
@@ -111,6 +113,37 @@ mod tests {
     }
 
     #[test]
+    fn resolves_qiita_aliases_and_items_discovery() {
+        let site = site_by_name("qiita").unwrap();
+
+        assert_eq!(site_by_name("qiita.com").unwrap().name, site.name);
+        assert!(recommendable_site_names().contains(&"qiita"));
+        assert!(matches!(
+            site.discovery,
+            Some(DiscoveryEndpoint::SearchApi {
+                request: SearchRequest::QiitaItems,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn resolves_bluesky_aliases_and_search_posts_discovery() {
+        let site = site_by_name("bluesky").unwrap();
+
+        assert_eq!(site_by_name("bsky").unwrap().name, site.name);
+        assert_eq!(site_by_name("bsky.app").unwrap().name, site.name);
+        assert!(recommendable_site_names().contains(&"bluesky"));
+        assert!(matches!(
+            site.discovery,
+            Some(DiscoveryEndpoint::SearchApi {
+                request: SearchRequest::BlueskySearchPosts,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn site_metadata_uses_discovery_endpoint_not_recommend_source() {
         let site = site_by_name("hackernews").unwrap();
 
@@ -202,6 +235,8 @@ mod tests {
                 "devto",
                 "zenn",
                 "twitter",
+                "qiita",
+                "bluesky",
                 "arxiv",
                 "github-advisory",
                 "cisa-kev",
@@ -221,15 +256,17 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 16);
+        assert_eq!(sites.len(), 18);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
         assert_eq!(sites[2].name, "zenn");
         assert_eq!(sites[3].name, "twitter");
-        assert_eq!(sites[4].name, "arxiv");
-        assert_eq!(sites[5].name, "github-advisory");
-        assert_eq!(sites[6].name, "cisa-kev");
-        assert_eq!(sites[15].name, "github-search");
+        assert_eq!(sites[4].name, "qiita");
+        assert_eq!(sites[5].name, "bluesky");
+        assert_eq!(sites[6].name, "arxiv");
+        assert_eq!(sites[7].name, "github-advisory");
+        assert_eq!(sites[8].name, "cisa-kev");
+        assert_eq!(sites[17].name, "github-search");
         assert!(sites.iter().all(|site| site.discovery.is_some()));
     }
 

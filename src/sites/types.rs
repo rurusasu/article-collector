@@ -92,6 +92,8 @@ pub enum SearchRequest {
     QueryParam { name: &'static str },
     ArxivSearch,
     XRecentSearch,
+    QiitaItems,
+    BlueskySearchPosts,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

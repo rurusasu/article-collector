@@ -2841,6 +2841,47 @@ mod tests {
         assert!(default_query.unwrap().contains("-is:retweet"));
     }
 
+    #[test]
+    fn resolves_qiita_site_name_to_items_search() {
+        let RecommendationTarget::Source {
+            site_name,
+            endpoint:
+                DiscoveryEndpoint::SearchApi {
+                    api_url,
+                    default_query,
+                    request: SearchRequest::QiitaItems,
+                },
+        } = resolve_recommendation_target("qiita").unwrap()
+        else {
+            panic!("qiita should resolve to Qiita items search");
+        };
+        assert_eq!(site_name, "qiita");
+        assert_eq!(api_url, "https://qiita.com/api/v2/items");
+        assert_eq!(default_query, Some("AI OR Rust OR security"));
+    }
+
+    #[test]
+    fn resolves_bluesky_site_name_to_search_posts() {
+        let RecommendationTarget::Source {
+            site_name,
+            endpoint:
+                DiscoveryEndpoint::SearchApi {
+                    api_url,
+                    default_query,
+                    request: SearchRequest::BlueskySearchPosts,
+                },
+        } = resolve_recommendation_target("bluesky").unwrap()
+        else {
+            panic!("bluesky should resolve to Bluesky searchPosts");
+        };
+        assert_eq!(site_name, "bluesky");
+        assert_eq!(
+            api_url,
+            "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
+        );
+        assert_eq!(default_query, Some("AI OR Rust OR security"));
+    }
+
     /// 検証: arXiv の site 名は既定 query の arXiv API 収集へ解決する
     /// 理由: AI/ML/CV/NLP 系の新着論文を `recommend all` に含めたい
     /// リスク: 論文 source が登録されず、既存の fetch/save 対応だけに留まる
@@ -3295,6 +3336,42 @@ mod tests {
         assert_eq!(plans[0].site_name, "twitter");
         assert_eq!(plans[0].limit, 7);
         assert_eq!(plans[0].query.as_deref(), Some("rust lang:en -is:retweet"));
+    }
+
+    #[test]
+    fn qiita_and_bluesky_source_plans_use_config_query_and_limit() {
+        let config = RecommendConfig {
+            sources: Some(vec!["qiita".to_string(), "bluesky".to_string()]),
+            source: BTreeMap::from([
+                (
+                    "qiita".to_string(),
+                    RecommendSiteConfig {
+                        limit: Some(6),
+                        query: Some("Rust tag:rust".to_string()),
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "bluesky".to_string(),
+                    RecommendSiteConfig {
+                        limit: Some(8),
+                        query: Some("atproto rust".to_string()),
+                        ..Default::default()
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+
+        let plans = source_plans_for_all(None, &config).unwrap();
+
+        assert_eq!(plans.len(), 2);
+        assert_eq!(plans[0].site_name, "qiita");
+        assert_eq!(plans[0].limit, 6);
+        assert_eq!(plans[0].query.as_deref(), Some("Rust tag:rust"));
+        assert_eq!(plans[1].site_name, "bluesky");
+        assert_eq!(plans[1].limit, 8);
+        assert_eq!(plans[1].query.as_deref(), Some("atproto rust"));
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use super::types::{DiscoveryEndpoint, FetchRoute, SaveType, Site};
 use super::{
-    arxiv, aws_security, aws_whatsnew, cisa_kev, cncf, devto, doi, github_advisory, github_search,
-    google_cloud_blog, hackernews, infoq, kubernetes, martinfowler, nvd, openreview,
-    thoughtworks_radar, twitter, youtube, zenn,
+    arxiv, aws_security, aws_whatsnew, bluesky, cisa_kev, cncf, devto, doi, github_advisory,
+    github_search, google_cloud_blog, hackernews, infoq, kubernetes, martinfowler, nvd,
+    openreview, qiita, thoughtworks_radar, twitter, youtube, zenn,
 };
 
 pub const SITES: &[Site] = &[
@@ -10,6 +10,8 @@ pub const SITES: &[Site] = &[
     devto::SITE,
     zenn::SITE,
     twitter::SITE,
+    qiita::SITE,
+    bluesky::SITE,
     youtube::SITE,
     arxiv::SITE,
     github_advisory::SITE,
