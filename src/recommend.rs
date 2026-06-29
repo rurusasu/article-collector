@@ -3139,7 +3139,7 @@ mod tests {
         assert_eq!(site_name, "bluesky");
         assert_eq!(
             api_url,
-            "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
+            "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts"
         );
         assert_eq!(default_query, Some("AI OR Rust OR security"));
     }
@@ -3707,13 +3707,13 @@ mod tests {
     #[test]
     fn builds_bluesky_search_posts_url_with_query_and_limit() {
         let url = build_bluesky_search_posts_url(
-            "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts",
+            "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts",
             "atproto rust",
             4,
         )
         .unwrap();
 
-        assert_eq!(url.host_str(), Some("public.api.bsky.app"));
+        assert_eq!(url.host_str(), Some("api.bsky.app"));
         assert!(url.as_str().contains("q=atproto+rust"));
         assert!(url.as_str().contains("limit=4"));
         assert!(url.as_str().contains("sort=latest"));

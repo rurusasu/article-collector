@@ -215,7 +215,7 @@ fn resolves_bluesky_site_name_to_search_posts() {
     assert_eq!(site_name, "bluesky");
     assert_eq!(
         api_url,
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts"
+        "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts"
     );
     assert_eq!(default_query, Some("AI OR Rust OR security"));
 }
@@ -316,7 +316,7 @@ Create `src/sites/bluesky.rs`:
 use super::types::{DiscoveryEndpoint, FetchRoute, SaveType, SearchRequest, Site, UrlRule};
 
 pub const BLUESKY_SEARCH_POSTS_API: &str =
-    "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts";
+    "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts";
 pub const DEFAULT_BLUESKY_QUERY: &str = "AI OR Rust OR security";
 
 const ARTICLE_RULES: &[UrlRule] = &[UrlRule::new(&["bsky.app/profile/", "/post/"])];
@@ -683,13 +683,13 @@ Add tests in `src/recommend.rs`:
 #[test]
 fn builds_bluesky_search_posts_url_with_query_and_limit() {
     let url = build_bluesky_search_posts_url(
-        "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts",
+        "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts",
         "atproto rust",
         4,
     )
     .unwrap();
 
-    assert_eq!(url.host_str(), Some("public.api.bsky.app"));
+    assert_eq!(url.host_str(), Some("api.bsky.app"));
     assert!(url.as_str().contains("q=atproto+rust"));
     assert!(url.as_str().contains("limit=4"));
     assert!(url.as_str().contains("sort=latest"));
@@ -1073,7 +1073,7 @@ Create `docs/sites/bluesky.md` with:
 
 - 種類: `DiscoveryEndpoint::SearchApi`
 - request: `SearchRequest::BlueskySearchPosts`
-- endpoint: `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts`
+- endpoint: `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts`
 - query: `[recommend.source.bluesky].query`
 
 public AppView の `app.bsky.feed.searchPosts` を使う query-based recommendation source として扱う。

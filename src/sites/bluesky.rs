@@ -1,7 +1,6 @@
 use super::types::{DiscoveryEndpoint, FetchRoute, SaveType, SearchRequest, Site, UrlRule};
 
-pub const BLUESKY_SEARCH_POSTS_API: &str =
-    "https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts";
+pub const BLUESKY_SEARCH_POSTS_API: &str = "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts";
 pub const DEFAULT_BLUESKY_QUERY: &str = "AI OR Rust OR security";
 
 const ARTICLE_RULES: &[UrlRule] = &[UrlRule::new(&["bsky.app/profile/", "/post/"])];

@@ -54,7 +54,7 @@ Add `src/sites/qiita.rs` and `src/sites/bluesky.rs` as the single registry entri
 
 Qiita should use `DiscoveryEndpoint::SearchApi` with a source-specific request variant, such as `SearchRequest::QiitaItems`, because response normalization is site-specific even though query assembly is simple. The collector should call `https://qiita.com/api/v2/items` with `page=1`, `per_page=<limit>`, and `query=<query>`, then normalize the response into existing recommendation item JSON.
 
-Bluesky should use a source-specific search request variant, such as `SearchRequest::BlueskySearchPosts`, because the response shape is not a simple array and post URLs must be built from author handles and record keys. The collector should call `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts` with `q=<query>`, `limit=<limit>`, and `sort=latest`, then normalize the `posts` array into existing recommendation item JSON.
+Bluesky should use a source-specific search request variant, such as `SearchRequest::BlueskySearchPosts`, because the response shape is not a simple array and post URLs must be built from author handles and record keys. The collector should call `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts` with `q=<query>`, `limit=<limit>`, and `sort=latest`, then normalize the `posts` array into existing recommendation item JSON.
 
 Qiita normalized items should include:
 
