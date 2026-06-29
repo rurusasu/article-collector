@@ -262,7 +262,8 @@ fn qiita_and_bluesky_source_plans_use_config_query_and_limit() {
 Run:
 
 ```powershell
-cargo test --locked sites::tests::resolves_qiita_aliases_and_items_discovery sites::tests::resolves_bluesky_aliases_and_search_posts_discovery recommend::tests::resolves_qiita_site_name_to_items_search recommend::tests::resolves_bluesky_site_name_to_search_posts recommend::tests::qiita_and_bluesky_source_plans_use_config_query_and_limit
+cargo test --locked qiita
+cargo test --locked bluesky
 ```
 
 Expected: FAIL because `qiita`, `bluesky`, `SearchRequest::QiitaItems`, and `SearchRequest::BlueskySearchPosts` do not exist.
@@ -372,7 +373,8 @@ pub const SITES: &[Site] = &[
 Run:
 
 ```powershell
-cargo test --locked sites::tests::resolves_qiita_aliases_and_items_discovery sites::tests::resolves_bluesky_aliases_and_search_posts_discovery recommend::tests::resolves_qiita_site_name_to_items_search recommend::tests::resolves_bluesky_site_name_to_search_posts recommend::tests::qiita_and_bluesky_source_plans_use_config_query_and_limit
+cargo test --locked qiita
+cargo test --locked bluesky
 ```
 
 Expected: PASS.
@@ -434,7 +436,7 @@ fn normalizes_qiita_items_response() {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::builds_qiita_items_url_with_query_and_limit recommend::tests::normalizes_qiita_items_response
+cargo test --locked qiita
 ```
 
 Expected: FAIL because Qiita helpers are missing.
@@ -534,7 +536,7 @@ fn qiita_tags(item: &Value) -> Vec<String> {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::builds_qiita_items_url_with_query_and_limit recommend::tests::normalizes_qiita_items_response
+cargo test --locked qiita
 ```
 
 Expected: PASS.
@@ -604,7 +606,7 @@ async fn serve_qiita_items_api(status: u16, body: &'static str) -> String {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::collect_qiita_items_sends_query_and_limit recommend::tests::collect_qiita_items_reports_http_errors
+cargo test --locked qiita
 ```
 
 Expected: FAIL because `collect_qiita_items` is missing.
@@ -663,7 +665,7 @@ DiscoveryEndpoint::SearchApi {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::collect_qiita_items_sends_query_and_limit recommend::tests::collect_qiita_items_reports_http_errors
+cargo test --locked qiita
 ```
 
 Expected: PASS.
@@ -735,7 +737,7 @@ fn normalizes_bluesky_search_posts_response() {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::builds_bluesky_search_posts_url_with_query_and_limit recommend::tests::normalizes_bluesky_search_posts_response
+cargo test --locked bluesky
 ```
 
 Expected: FAIL because Bluesky helpers are missing.
@@ -778,9 +780,15 @@ fn bluesky_post_to_recommendation(post: &Value, rank: usize) -> Option<Value> {
         .and_then(Value::as_str)
         .filter(|name| !name.trim().is_empty())
         .unwrap_or(handle);
-    let record = post.get("record").unwrap_or(&Value::Null);
-    let text = record.get("text").and_then(Value::as_str).unwrap_or("");
-    let created_at = record.get("createdAt").and_then(Value::as_str);
+    let text = post
+        .get("record")
+        .and_then(|record| record.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let created_at = post
+        .get("record")
+        .and_then(|record| record.get("createdAt"))
+        .and_then(Value::as_str);
     let title = social_text_title(text, "Bluesky post", &rkey);
     let url = format!("https://bsky.app/profile/{handle}/post/{rkey}");
 
@@ -845,7 +853,7 @@ Then update `x_tweet_title` to call `social_text_title(text, "X post", tweet_id)
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::builds_bluesky_search_posts_url_with_query_and_limit recommend::tests::normalizes_bluesky_search_posts_response
+cargo test --locked bluesky
 ```
 
 Expected: PASS.
@@ -921,7 +929,7 @@ async fn serve_bluesky_search_posts_api(status: u16, body: &'static str) -> Stri
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::collect_bluesky_search_posts_sends_query_limit_and_sort recommend::tests::collect_bluesky_search_posts_reports_http_errors
+cargo test --locked bluesky
 ```
 
 Expected: FAIL because `collect_bluesky_search_posts` is missing.
@@ -984,7 +992,7 @@ DiscoveryEndpoint::SearchApi {
 Run:
 
 ```powershell
-cargo test --locked recommend::tests::collect_bluesky_search_posts_sends_query_limit_and_sort recommend::tests::collect_bluesky_search_posts_reports_http_errors
+cargo test --locked bluesky
 ```
 
 Expected: PASS.
@@ -1106,7 +1114,7 @@ Include `qiita` and `bluesky` in query-capable source text and in the `recommend
 Run:
 
 ```powershell
-cargo test --locked sites::tests::lists_recommendable_site_names sites::tests::lists_recommendable_sites
+cargo test --locked recommendable_site
 ```
 
 Expected: PASS.
@@ -1121,7 +1129,8 @@ Expected: PASS.
 Run:
 
 ```powershell
-cargo test --locked sites::tests::resolves_qiita_aliases_and_items_discovery sites::tests::resolves_bluesky_aliases_and_search_posts_discovery recommend::tests::resolves_qiita_site_name_to_items_search recommend::tests::resolves_bluesky_site_name_to_search_posts recommend::tests::qiita_and_bluesky_source_plans_use_config_query_and_limit recommend::tests::builds_qiita_items_url_with_query_and_limit recommend::tests::normalizes_qiita_items_response recommend::tests::collect_qiita_items_sends_query_and_limit recommend::tests::collect_qiita_items_reports_http_errors recommend::tests::builds_bluesky_search_posts_url_with_query_and_limit recommend::tests::normalizes_bluesky_search_posts_response recommend::tests::collect_bluesky_search_posts_sends_query_limit_and_sort recommend::tests::collect_bluesky_search_posts_reports_http_errors
+cargo test --locked qiita
+cargo test --locked bluesky
 ```
 
 Expected: PASS.
