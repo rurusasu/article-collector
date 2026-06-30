@@ -7,6 +7,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const GH_BIN_ENV: &str = "ARTICLE_COLLECTOR_GH_BIN";
+const GIT_BIN_ENV: &str = "ARTICLE_COLLECTOR_GIT_BIN";
 
 #[derive(Debug)]
 pub struct PreparedTargetRepo {
@@ -136,7 +137,11 @@ fn ensure_non_main_branch(target_dir: &Path) -> Result<()> {
 }
 
 fn current_branch(target_dir: &Path) -> Result<String> {
-    let output = run_output_in(target_dir, "git", &["branch", "--show-current"])?;
+    let output = run_git_output_in_with_timeout(
+        target_dir,
+        &["branch", "--show-current"],
+        command_timeout(),
+    )?;
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
@@ -149,9 +154,8 @@ fn is_valid_target_repo(target_dir: &Path) -> bool {
         return false;
     }
 
-    let Ok(output) = run_output_in_with_timeout(
+    let Ok(output) = run_git_output_in_with_timeout(
         target_dir,
-        "git",
         &["rev-parse", "--is-inside-work-tree"],
         health_check_timeout(),
     ) else {
@@ -284,7 +288,11 @@ fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-    run_cmd_in(dir, "git", args)
+    run_git_with_timeout(dir, args, command_timeout())
+}
+
+fn run_git_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
+    run_cmd_in_with_timeout(dir, &git_program(), args, timeout)
 }
 
 fn run_git_owned(dir: &Path, args: &[String]) -> Result<()> {
@@ -300,8 +308,8 @@ fn run_cmd_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<()> {
     run_cmd_in_with_timeout(dir, cmd, args, command_timeout())
 }
 
-fn run_output_in(dir: &Path, cmd: &str, args: &[&str]) -> Result<Output> {
-    run_output_in_with_timeout(dir, cmd, args, command_timeout())
+fn run_git_output_in_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<Output> {
+    run_output_in_with_timeout(dir, &git_program(), args, timeout)
 }
 
 fn run_cmd_with_timeout(cmd: &str, args: &[&str], timeout: Duration) -> Result<()> {
@@ -430,7 +438,7 @@ fn commit_push_and_create_pr(
     run_git_owned(target_dir, &add_args)?;
     run_git(target_dir, &["commit", "-m", commit_message])?;
     let branch = current_branch(target_dir)?;
-    run_git(target_dir, &["push", "-u", "origin", &branch])?;
+    push_branch(target_dir, &branch)?;
 
     run_cmd_in(
         target_dir,
@@ -445,8 +453,43 @@ fn commit_push_and_create_pr(
     Ok(())
 }
 
+fn push_branch(target_dir: &Path, branch: &str) -> Result<()> {
+    push_branch_with_timeout(target_dir, branch, command_timeout())
+}
+
+fn push_branch_with_timeout(target_dir: &Path, branch: &str, timeout: Duration) -> Result<()> {
+    let result = run_git_with_timeout(target_dir, &["push", "-u", "origin", branch], timeout);
+    if result.is_ok() {
+        return Ok(());
+    }
+
+    let error = result.unwrap_err();
+    if is_timeout_error(&error) && remote_branch_exists(target_dir, branch) {
+        return Ok(());
+    }
+
+    Err(error)
+}
+
+fn remote_branch_exists(target_dir: &Path, branch: &str) -> bool {
+    run_git_with_timeout(
+        target_dir,
+        &["ls-remote", "--exit-code", "--heads", "origin", branch],
+        health_check_timeout(),
+    )
+    .is_ok()
+}
+
+fn is_timeout_error(error: &anyhow::Error) -> bool {
+    error.to_string().contains("timed out after")
+}
+
 fn gh_program() -> String {
     std::env::var(GH_BIN_ENV).unwrap_or_else(|_| "gh".to_string())
+}
+
+fn git_program() -> String {
+    std::env::var(GIT_BIN_ENV).unwrap_or_else(|_| "git".to_string())
 }
 
 #[cfg(test)]
@@ -666,6 +709,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn push_timeout_is_recovered_when_remote_branch_exists() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let sandbox = normalized_temp_path("target-repo-push-timeout-recovered");
+        let target_dir = sandbox.join("target-repo");
+        let bin_dir = sandbox.join("bin");
+        let _ = fs::remove_dir_all(&sandbox);
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fake_git = write_fake_git_push_timeout(&bin_dir);
+
+        let previous_git_bin = std::env::var_os(GIT_BIN_ENV);
+        std::env::set_var(GIT_BIN_ENV, &fake_git);
+
+        let result =
+            push_branch_with_timeout(&target_dir, "article/recovered", Duration::from_millis(50));
+
+        assert!(
+            result.is_ok(),
+            "push timeout should be recovered: {result:#?}"
+        );
+
+        restore_env(GIT_BIN_ENV, previous_git_bin);
+        let _ = fs::remove_dir_all(sandbox);
+    }
+
+    #[test]
+    fn push_timeout_remains_error_when_remote_branch_is_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let sandbox = normalized_temp_path("target-repo-push-timeout-missing");
+        let target_dir = sandbox.join("target-repo");
+        let bin_dir = sandbox.join("bin");
+        let _ = fs::remove_dir_all(&sandbox);
+        fs::create_dir_all(&target_dir).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        let fake_git = write_fake_git_push_timeout(&bin_dir);
+
+        let previous_git_bin = std::env::var_os(GIT_BIN_ENV);
+        std::env::set_var(GIT_BIN_ENV, &fake_git);
+
+        let error =
+            push_branch_with_timeout(&target_dir, "article/missing", Duration::from_millis(50))
+                .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("push -u origin article/missing timed out after 50ms"),
+            "unexpected error: {error:#}"
+        );
+
+        restore_env(GIT_BIN_ENV, previous_git_bin);
+        let _ = fs::remove_dir_all(sandbox);
+    }
+
     fn normalized_temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("article-collector-{name}-{}", std::process::id()))
     }
@@ -682,6 +780,55 @@ mod tests {
         } else {
             let path = bin_dir.join("gh");
             fs::write(&path, "#!/usr/bin/env sh\nmkdir -p \"$4/.git\"\nexit 1\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut permissions = fs::metadata(&path).unwrap().permissions();
+                permissions.set_mode(0o755);
+                fs::set_permissions(&path, permissions).unwrap();
+            }
+            path
+        }
+    }
+
+    fn write_fake_git_push_timeout(bin_dir: &Path) -> PathBuf {
+        if cfg!(windows) {
+            let path = bin_dir.join("git.cmd");
+            fs::write(
+                &path,
+                concat!(
+                    "@echo off\r\n",
+                    "if \"%1\"==\"push\" (\r\n",
+                    "  powershell -NoProfile -Command \"Start-Sleep -Milliseconds 500\"\r\n",
+                    "  exit /b 0\r\n",
+                    ")\r\n",
+                    "if \"%1\"==\"ls-remote\" (\r\n",
+                    "  if \"%5\"==\"article/recovered\" exit /b 0\r\n",
+                    "  exit /b 2\r\n",
+                    ")\r\n",
+                    "exit /b 1\r\n",
+                ),
+            )
+            .unwrap();
+            path
+        } else {
+            let path = bin_dir.join("git");
+            fs::write(
+                &path,
+                concat!(
+                    "#!/usr/bin/env sh\n",
+                    "if [ \"$1\" = \"push\" ]; then\n",
+                    "  sleep 1\n",
+                    "  exit 0\n",
+                    "fi\n",
+                    "if [ \"$1\" = \"ls-remote\" ]; then\n",
+                    "  if [ \"$5\" = \"article/recovered\" ]; then exit 0; fi\n",
+                    "  exit 2\n",
+                    "fi\n",
+                    "exit 1\n",
+                ),
+            )
+            .unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
