@@ -1,0 +1,145 @@
+# Production Plugin Registry Provisioning Design
+
+## Goal
+
+Provision the production Ed25519 trust root and protected GitHub publishing
+environment for the optional MCP plugin registry. Publish and independently
+verify an empty signed registry before starting the X connector tracked by
+GitHub issue
+[#85](https://github.com/rurusasu/article-collector/issues/85).
+
+GitHub issue
+[#84](https://github.com/rurusasu/article-collector/issues/84) owns this
+provisioning, release verification, and cleanup phase. Work uses the dedicated
+`feat/84-registry-provision` branch based on `main`.
+
+## Scope
+
+- Generate one production 32-byte Ed25519 seed outside the repository.
+- Store the base64 seed in the administrator's password manager and the
+  protected GitHub `plugin-registry` environment.
+- Commit only the matching public key and key fingerprint.
+- Enable the existing registry publisher after its protected environment is
+  configured.
+- Release a core binary containing the production trust key.
+- Publish and independently verify an empty signed registry.
+- Close issue #84 and clean up its branches/worktrees only after the
+  production verification succeeds.
+
+## Out of Scope
+
+- Implementing or publishing the X connector.
+- Adding any production plugin entry to the registry.
+- Supporting multiple active production signing keys.
+- Changing registry schema v1, plugin protocol v1, or the registry endpoint.
+- Introducing KMS, Vault, third-party registries, or user-configurable trust
+  roots.
+
+## Secret and Trust Boundary
+
+The private material is a base64-encoded 32-byte Ed25519 seed accepted through
+`PLUGIN_REGISTRY_SIGNING_KEY`. It must never be written to the repository,
+workspace files, GitHub issues, pull requests, normal command output, or CI
+logs.
+
+The administrator generates the seed in a local interactive terminal, saves
+the recovery copy directly in a password manager, and registers it as the
+`PLUGIN_REGISTRY_SIGNING_KEY` secret in the GitHub `plugin-registry`
+environment. The provisioning workflow must not ask Codex or another
+non-interactive automation channel to display or relay the seed.
+
+The repository stores only a `TrustedKey` entry containing:
+
+- the base64 Ed25519 public key;
+- `ed25519-sha256:<lowercase-hex>` over the raw public key bytes as `key_id`;
+- `revoked: false`.
+
+The `plugin-registry` environment permits registry publication only from the
+main-branch Release workflow. Pull-request workflows validate public schemas
+and workflow structure but never reference the private secret.
+
+## Publication Flow
+
+1. Configure the protected `plugin-registry` environment and its signing
+   secret before enabling publication.
+2. Add the matching public key to `registry/trusted-keys.json`.
+3. Remove the publisher's fixed `if: ${{ false }}` guard without weakening its
+   `needs: build`, environment, concurrency, or GitHub App token boundaries.
+4. Validate the public trust set, registry schema, shell scripts, and workflow
+   security in pull-request CI.
+5. Merge and release a core version that embeds the production public key.
+6. After all five core binary builds succeed, run the protected publisher.
+7. Download any existing `plugin-registry-v1` assets and authenticate them
+   before calculating the next revision.
+8. Set the new revision to
+   `max(source revision, published revision) + 1`, refresh timestamps, sign the
+   exact JSON bytes, and verify the result before upload.
+9. Upload `plugins-v1.json` and `plugins-v1.sig` together to the stable
+   `plugin-registry-v1` GitHub Release.
+10. Independently download the published assets and verify them with the
+    committed trust set.
+
+The initial production registry intentionally contains no plugins. Publishing
+it proves the trust and release path independently of X-specific code.
+
+## Failure Handling
+
+- A missing secret, invalid seed, public/private key mismatch, signing error,
+  schema error, or signature verification error fails the publisher.
+- Existing published assets are authenticated before their revision is
+  trusted.
+- No upload occurs until local signing and verification both succeed.
+- The publisher never reuses or decreases a published revision.
+- A failed publication leaves issue #84 open and retains its branches and
+  worktrees for diagnosis.
+- A failed core release does not run the registry publisher because the
+  publisher continues to depend on the build matrix.
+
+GitHub Release asset replacement is not transactional across two files. The
+publisher therefore verifies both files before upload and uses one serialized
+publisher job. Clients downloading during replacement may receive a temporary
+pair mismatch, which fails closed under exact-byte signature verification and
+can be retried after publication completes.
+
+## Verification
+
+Pull-request verification:
+
+```bash
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo build --release --locked
+bash scripts/verify-plugin-registry.sh
+bash scripts/verify-workflow-security.sh
+task verify-pr PR_NUMBER=123
+```
+
+Production smoke verification:
+
+- The core GitHub Release contains successful Linux amd64/arm64, macOS
+  amd64/arm64, and Windows amd64 assets.
+- `plugin-registry-v1` contains non-empty `plugins-v1.json` and
+  `plugins-v1.sig` assets.
+- The published JSON is fresh, schema v1, monotonically revised, and has an
+  empty `plugins` array.
+- The published signature verifies against the public key embedded in the
+  released core.
+- `article-collector plugin install x` reaches the authenticated registry and
+  fails with an unknown-plugin error rather than an unprovisioned trust,
+  download, expiry, or signature error.
+- No private seed appears in the repository, workflow logs, release assets, or
+  issue/PR content.
+
+## Release and Cleanup
+
+Issue #84 remains open until the production smoke verification passes. After
+success:
+
+1. record the core release, registry release, revision, and verification
+   evidence in issue #84;
+2. close issue #84;
+3. remove the merged #84 branches and their linked worktrees;
+4. create the issue #85 branch from the verified `main`;
+5. publish X connector artifacts before adding the X entry to the signed
+   registry.
