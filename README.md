@@ -117,7 +117,8 @@ plugin は MCP stdio server として別 process で動作する。署名と che
 配布物の publisher/integrity を検証するが、完全な OS sandbox ではないため、
 plugin は実行ユーザーと同じ filesystem/network 権限を持つ。install 元は binary
 に固定された official registry のみで、任意 URL や local executable は指定
-できない。
+できない。timeout 時は専用 process group/Job Object を終了するが、同一ユーザー
+権限の別 process による data root 改変まで隔離するものではない。
 
 現在は汎用基盤のみで、production trust key と plugin entry は未 provision
 である。この状態の `plugin install` / `plugin update` は未設定 error になる。

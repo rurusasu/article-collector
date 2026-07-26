@@ -1,4 +1,4 @@
-use crate::plugins::registry::ResolvedPlugin;
+use crate::plugins::registry::{download_http_client, ResolvedPlugin};
 use crate::plugins::state::InstalledPluginStore;
 use crate::plugins::types::{InstalledPlugin, PluginDescriptor, PluginManifest, RegistryArtifact};
 use anyhow::{bail, Context, Result};
@@ -8,7 +8,6 @@ use semver::Version;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 
 #[async_trait]
@@ -57,7 +56,7 @@ where
         Ok(Self {
             store,
             probe,
-            http: artifact_http_client()?,
+            http: download_http_client(false)?,
             allow_insecure_localhost: false,
         })
     }
@@ -67,7 +66,7 @@ where
         Self {
             store,
             probe,
-            http: artifact_http_client().expect("test HTTP client"),
+            http: download_http_client(true).expect("test HTTP client"),
             allow_insecure_localhost: true,
         }
     }
@@ -122,7 +121,12 @@ where
         make_executable(&staged_executable)?;
         write_manifest(staging.path(), &resolved.manifest)?;
 
-        let probe_plugin = installed_record(resolved, staged_executable.clone());
+        let probe_plugin = installed_record(
+            resolved,
+            staged_executable
+                .canonicalize()
+                .with_context(|| format!("Failed to resolve {}", staged_executable.display()))?,
+        );
         let descriptor = self.probe.verify(&probe_plugin).await?;
         validate_descriptor(&resolved.manifest, &descriptor)?;
 
@@ -235,14 +239,6 @@ fn hex_lower(bytes: &[u8]) -> String {
         write!(&mut output, "{byte:02x}").expect("writing to String cannot fail");
     }
     output
-}
-
-fn artifact_http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .context("Failed to build plugin artifact HTTP client")
 }
 
 fn installed_record(resolved: &ResolvedPlugin, executable: PathBuf) -> InstalledPlugin {

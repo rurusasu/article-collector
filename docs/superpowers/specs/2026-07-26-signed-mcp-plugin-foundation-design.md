@@ -334,6 +334,11 @@ verification, release work, and cleanup. No secondary tracker is used.
 ## Implementation Status
 
 The generic foundation is implemented on `feat/84-plugin-foundation`.
+Review hardening adds a startup-wide MCP deadline, process-group/Job Object
+cleanup, bounded redacted diagnostics, canonical runtime path invariants,
+deferred executable readiness, HTTPS-only redirects, client-side options
+schema validation, and monotonic revision derivation from the published
+registry.
 Production registry publishing remains deliberately disabled until an
 administrator provisions the Ed25519 public key, protected
 `PLUGIN_REGISTRY_SIGNING_KEY` secret, and protected `plugin-registry`

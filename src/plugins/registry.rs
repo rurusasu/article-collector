@@ -41,11 +41,7 @@ impl RegistryClient {
         if index_url.scheme() != "https" || signature_url.scheme() != "https" {
             bail!("Plugin registry URLs must use HTTPS");
         }
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(30))
-            .build()
-            .context("Failed to build plugin registry HTTP client")?;
+        let http = download_http_client(false)?;
         Ok(Self {
             http,
             index_url,
@@ -295,6 +291,12 @@ fn validate_manifest(
     let mut names = HashSet::new();
     for source in &manifest.sources {
         crate::plugins::paths::validate_plugin_name(&source.name)?;
+        jsonschema::validator_for(&source.options_schema).with_context(|| {
+            format!(
+                "Plugin source '{}' contains an invalid options schema",
+                source.name
+            )
+        })?;
         if !names.insert(source.name.as_str()) {
             bail!(
                 "Plugin manifest contains duplicate source '{}'",
@@ -338,6 +340,31 @@ async fn bounded_download(client: &reqwest::Client, url: Url, maximum: usize) ->
         bytes.extend_from_slice(&chunk);
     }
     Ok(bytes)
+}
+
+pub(crate) fn download_http_client(allow_insecure_localhost: bool) -> Result<reqwest::Client> {
+    let redirect = reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 10 {
+            attempt.error("too many plugin download redirects")
+        } else if download_url_allowed(attempt.url(), allow_insecure_localhost) {
+            attempt.follow()
+        } else {
+            attempt.error("plugin download redirect must use HTTPS")
+        }
+    });
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .redirect(redirect)
+        .build()
+        .context("Failed to build plugin download HTTP client")
+}
+
+fn download_url_allowed(url: &Url, allow_insecure_localhost: bool) -> bool {
+    url.scheme() == "https"
+        || (allow_insecure_localhost
+            && url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost")))
 }
 
 #[cfg(test)]
@@ -548,6 +575,46 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("duplicate plugin"));
+    }
+
+    /// 検証:署名済みmanifest内の不正なoptions JSON Schemaをinstall前に拒否する
+    /// 理由:publisher以外の署名経路でもruntime contractを早期検証するため
+    /// リスク:install/probe後のrecommend planningで初めて壊れる
+    #[test]
+    fn rejects_invalid_options_json_schema() {
+        let mut invalid = version("1.0.0", ">=1.0.0, <2.0.0");
+        invalid["manifest"]["sources"][0]["options_schema"] = json!({"type": 42});
+        let fixture = signed_registry_fixture(registry(vec![invalid]));
+
+        let error = verify_registry(
+            &fixture.index_bytes,
+            &fixture.signature_bytes,
+            &[fixture.trusted_key],
+            utc("2026-07-26T12:00:00Z"),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("options schema"));
+    }
+
+    /// 検証:redirect先もHTTPS（test localhostを除く）に制限する
+    /// 理由:初期URLだけのscheme検査ではHTTP downgradeを防げないため
+    /// リスク:registry/artifactの取得先privacyとavailabilityが低下する
+    #[test]
+    fn rejects_insecure_download_redirect_targets() {
+        assert!(download_url_allowed(
+            &Url::parse("https://example.com/plugin").unwrap(),
+            false
+        ));
+        assert!(!download_url_allowed(
+            &Url::parse("http://example.com/plugin").unwrap(),
+            false
+        ));
+        assert!(download_url_allowed(
+            &Url::parse("http://127.0.0.1/plugin").unwrap(),
+            true
+        ));
     }
 
     #[test]

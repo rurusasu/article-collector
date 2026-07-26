@@ -82,9 +82,12 @@ client secret、authorization code を core へ返してはいけない。
 core は response 順から rank を決める。1 response は 16 MiB、title は
 8 KiB、各 content は 1 MiB、件数は request limit 以下に制限する。
 
-initialize は 10 秒、collect は 60 秒、configure は 300 秒、graceful
-shutdown は 5 秒で timeout する。timeout または crash 時は child process を
-終了し、許可された環境変数の secret value を stderr から redact する。
+initialize request、initialized notification、`tools/list` を含む startup
+全体は 10 秒、collect は 60 秒、configure は 300 秒、graceful shutdown は
+5 秒で timeout する。plugin は専用 process group（Windows では Job Object）
+で起動し、timeout または crash 時は同じ group の descendant も終了する。
+許可された全環境変数の value は stderr と bounded JSON-RPC error 診断から
+redact する。JSON-RPC error data は core の error/log へ転記しない。
 
 ## trust boundary
 
@@ -96,7 +99,13 @@ official registry の署名と curation は publisher identity と配布物の�
 
 executable は plugin data root 配下の regular file に限定し、absolute path、
 `..`、symlink/reparse point を拒否する。shell は介さず argument vector で直接
-起動する。
+起動する。state から実行 path を解決するときは data root と executable を
+canonicalize して containment を再確認し、runtime 起動時にも同じ canonical
+path であることを要求する。
+
+これは同一ユーザー権限の hostile process に対する完全な filesystem sandbox
+ではない。同じユーザーは plugin data root を変更できるため、その脅威まで
+防ぐには将来の OS sandbox と handle-relative/no-follow storage API が必要である。
 
 ## local state
 
@@ -127,10 +136,17 @@ revision rollback を拒否する。install/update は同一 filesystem 上の
 以前の active version を保持する。crash で残った staging directory は
 `plugin doctor` が決定的順序で報告する。
 
+source catalog は signed installed manifest だけから namespace を構築し、
+executable の存在確認は実行直前へ遅延する。欠損 executable はその plugin
+source の failure となるため、無関係な built-in source を停止せず、
+`recommend all` では他 source の収集を継続する。
+
 ## signed registry と release
 
 registry schema v1 は revision、生成/失効時刻、plugin versions、protocol
 compatibility、manifest、5 target の artifact URL/byte length/SHA-256 を持つ。
+client も options JSON Schema を compile validation し、registry と artifact
+の全 redirect hop を HTTPS に限定する。
 `plugins-v1.sig` は JSON の再 serialize 結果ではなく `plugins-v1.json` の
 exact bytes へ Ed25519 signature を付ける。
 
@@ -148,6 +164,10 @@ registry release は必ず artifact-first で行う。
 3. expiry を更新し exact bytes を protected environment 内で署名する。
 4. local verify 後、`plugin-registry-v1` release へ JSON と signature を同時に
    `--clobber` upload する。
+
+publisher は既発行の JSON/signature を download・検証し、
+`max(source revision, published revision) + 1` を採番する。同じ source checkout
+から繰り返し実行しても revision を再利用しない。
 
 PR CI は schema と development fixture signature だけを検証し、production
 private key を参照しない。production publishing job を有効化する前に repository

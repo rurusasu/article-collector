@@ -82,6 +82,40 @@ impl InstalledPluginStore {
     }
 
     pub fn resolve_runtime_plugin(&self, mut plugin: InstalledPlugin) -> Result<InstalledPlugin> {
+        plugin = self.resolve_runtime_plugin_path(plugin)?;
+        let canonical_root = self
+            .paths
+            .data_root
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve {}", self.paths.data_root.display()))?;
+        let executable = plugin.executable.canonicalize().with_context(|| {
+            format!(
+                "Plugin '{}' executable does not exist: {}",
+                plugin.name,
+                plugin.executable.display()
+            )
+        })?;
+        if !executable.starts_with(&canonical_root) {
+            bail!(
+                "Plugin '{}' executable resolves outside the plugin data root",
+                plugin.name
+            );
+        }
+        if !fs::metadata(&executable)?.is_file() {
+            bail!(
+                "Plugin '{}' executable is not a file: {}",
+                plugin.name,
+                executable.display()
+            );
+        }
+        plugin.executable = executable;
+        Ok(plugin)
+    }
+
+    pub fn resolve_runtime_plugin_path(
+        &self,
+        mut plugin: InstalledPlugin,
+    ) -> Result<InstalledPlugin> {
         if plugin.executable.is_absolute()
             || plugin
                 .executable
@@ -99,20 +133,6 @@ impl InstalledPluginStore {
             .plugin_root(&plugin.name)?
             .join(&plugin.executable);
         self.paths.ensure_safe_plugin_path(&executable)?;
-        let metadata = fs::metadata(&executable).with_context(|| {
-            format!(
-                "Plugin '{}' executable does not exist: {}",
-                plugin.name,
-                executable.display()
-            )
-        })?;
-        if !metadata.is_file() {
-            bail!(
-                "Plugin '{}' executable is not a file: {}",
-                plugin.name,
-                executable.display()
-            );
-        }
         plugin.executable = executable;
         Ok(plugin)
     }

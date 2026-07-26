@@ -4,6 +4,7 @@ use crate::plugins::types::{
 };
 use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
+use command_group::{AsyncCommandGroup, AsyncGroupChild};
 use futures::{SinkExt, StreamExt};
 use rmcp::transport::async_rw::JsonRpcMessageCodec;
 use serde_json::{json, Value};
@@ -12,7 +13,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
@@ -20,6 +21,7 @@ pub const MAX_MCP_FRAME_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TITLE_BYTES: usize = 8 * 1024;
 const MAX_CONTENT_BYTES: usize = 1024 * 1024;
 const MAX_STDERR_BYTES: usize = 256 * 1024;
+const MAX_PLUGIN_DIAGNOSTIC_BYTES: usize = 8 * 1024;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const COLLECT_TIMEOUT: Duration = Duration::from_secs(60);
 const CONFIGURE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -113,7 +115,7 @@ impl PluginProbe for PluginRuntime {
 }
 
 struct McpSession {
-    child: Child,
+    child: AsyncGroupChild,
     reader: FramedRead<ChildStdout, JsonRpcMessageCodec<Value>>,
     writer: FramedWrite<ChildStdin, JsonRpcMessageCodec<Value>>,
     stderr: Arc<Mutex<Vec<u8>>>,
@@ -123,6 +125,12 @@ struct McpSession {
 
 impl McpSession {
     async fn start(plugin: &InstalledPlugin) -> Result<Self> {
+        if !plugin.executable.is_absolute() {
+            bail!(
+                "Plugin executable must be an absolute canonical path: {}",
+                plugin.executable.display()
+            );
+        }
         let executable = plugin.executable.canonicalize().with_context(|| {
             format!(
                 "Failed to resolve plugin executable {}",
@@ -131,6 +139,12 @@ impl McpSession {
         })?;
         if !executable.is_file() {
             bail!("Plugin executable is not a file: {}", executable.display());
+        }
+        if executable != plugin.executable {
+            bail!(
+                "Plugin executable changed after safe path resolution: {}",
+                plugin.executable.display()
+            );
         }
         let mut command = Command::new(&executable);
         command
@@ -141,20 +155,26 @@ impl McpSession {
             .env_clear();
         copy_allowed_environment(&mut command, &plugin.manifest.environment)?;
         let mut child = command
-            .spawn()
+            .group_spawn()
             .with_context(|| format!("Failed to start plugin {}", plugin.name))?;
-        let stdin = child.stdin.take().context("Plugin stdin is unavailable")?;
+        let stdin = child
+            .inner()
+            .stdin
+            .take()
+            .context("Plugin stdin is unavailable")?;
         let stdout = child
+            .inner()
             .stdout
             .take()
             .context("Plugin stdout is unavailable")?;
         let stderr = child
+            .inner()
             .stderr
             .take()
             .context("Plugin stderr is unavailable")?;
         let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
         tokio::spawn(capture_stderr(stderr, stderr_buffer.clone()));
-        let stderr_redactions = secret_environment_values(&plugin.manifest.environment);
+        let stderr_redactions = allowed_environment_values(&plugin.manifest.environment);
 
         let mut session = Self {
             child,
@@ -170,6 +190,21 @@ impl McpSession {
             stderr_redactions,
             next_id: 1,
         };
+        let startup = tokio::time::timeout(INITIALIZE_TIMEOUT, session.initialize()).await;
+        match startup {
+            Ok(Ok(())) => Ok(session),
+            Ok(Err(error)) => {
+                let _ = session.terminate().await;
+                Err(error)
+            }
+            Err(_) => {
+                let _ = session.terminate().await;
+                bail!("Plugin MCP startup timed out");
+            }
+        }
+    }
+
+    async fn initialize(&mut self) -> Result<()> {
         let initialize = json!({
             "protocolVersion": "2025-06-18",
             "capabilities": {},
@@ -178,21 +213,15 @@ impl McpSession {
                 "version": env!("CARGO_PKG_VERSION")
             }
         });
-        tokio::time::timeout(
-            INITIALIZE_TIMEOUT,
-            session.request("initialize", initialize),
-        )
-        .await
-        .context("Plugin MCP initialize timed out")??;
-        session
-            .writer
+        self.request("initialize", initialize).await?;
+        self.writer
             .send(json!({
                 "jsonrpc": "2.0",
                 "method": "notifications/initialized"
             }))
             .await
             .context("Failed to send MCP initialized notification")?;
-        let tools = session
+        let tools = self
             .request("tools/list", json!({}))
             .await
             .context("Failed to list plugin MCP tools")?;
@@ -203,7 +232,7 @@ impl McpSession {
             .iter()
             .filter_map(|tool| tool.get("name").and_then(Value::as_str));
         validate_required_tools(names)?;
-        Ok(session)
+        Ok(())
     }
 
     async fn call_tool(
@@ -245,7 +274,8 @@ impl McpSession {
                 continue;
             }
             if let Some(error) = frame.get("error") {
-                bail!("Plugin MCP request '{method}' failed: {error}");
+                let diagnostic = sanitize_json_rpc_error(error, &self.stderr_redactions);
+                bail!("Plugin MCP request '{method}' failed: {diagnostic}");
             }
             return frame
                 .get("result")
@@ -270,14 +300,18 @@ impl McpSession {
                 }
             }
             Err(_) => {
-                self.child
-                    .kill()
-                    .await
-                    .context("Failed to kill plugin process")?;
-                let _ = self.child.wait().await;
+                self.terminate().await?;
             }
         }
         Ok(())
+    }
+
+    async fn terminate(&mut self) -> Result<()> {
+        match self.child.kill().await {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => Ok(()),
+            Err(error) => Err(error).context("Failed to kill plugin process group"),
+        }
     }
 }
 
@@ -386,18 +420,37 @@ fn sanitize_stderr_bytes(bytes: &[u8], secrets: &[String]) -> String {
     output
 }
 
-fn secret_environment_values(allowed: &[String]) -> Vec<String> {
+fn allowed_environment_values(allowed: &[String]) -> Vec<String> {
     allowed
         .iter()
-        .filter(|name| {
-            let uppercase = name.to_ascii_uppercase();
-            ["TOKEN", "SECRET", "PASSWORD", "API_KEY", "PRIVATE_KEY"]
-                .iter()
-                .any(|part| uppercase.contains(part))
-        })
         .filter_map(|name| std::env::var(name).ok())
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn sanitize_json_rpc_error(error: &Value, secrets: &[String]) -> String {
+    let code = error
+        .get("code")
+        .and_then(Value::as_i64)
+        .map_or_else(|| "unknown".to_string(), |code| code.to_string());
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("plugin returned an unspecified error");
+    let sanitized = sanitize_stderr_bytes(message.as_bytes(), secrets);
+    let bounded = truncate_utf8(&sanitized, MAX_PLUGIN_DIAGNOSTIC_BYTES);
+    format!("code {code}: {bounded}")
+}
+
+fn truncate_utf8(value: &str, maximum_bytes: usize) -> &str {
+    if value.len() <= maximum_bytes {
+        return value;
+    }
+    let mut end = maximum_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
 }
 
 fn reject_secret_fields(value: &Value) -> Result<()> {
@@ -547,7 +600,7 @@ mod tests {
             registry_revision: 1,
             name: "example".to_string(),
             version: Version::parse("1.0.0").unwrap(),
-            executable,
+            executable: executable.canonicalize().unwrap(),
             manifest: PluginManifest {
                 name: "example".to_string(),
                 version: Version::parse("1.0.0").unwrap(),
@@ -625,7 +678,27 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{tools}]}}}}'
 
         let error = PluginRuntime.describe(&plugin).await.unwrap_err();
 
-        assert!(error.to_string().contains("initialize timed out"));
+        assert!(error.to_string().contains("startup timed out"));
+    }
+
+    /// 検証: initialize応答後にtools/listが停止してもstartup deadlineで終了する
+    /// 理由: required tool discoveryもMCP startup lifecycleの一部だから
+    /// リスク: install/doctor/recommendが無期限に停止する
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn tools_list_timeout_terminates_hanging_plugin() {
+        let script = r#"
+IFS= read -r initialize
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fixture","version":"1"}}}'
+IFS= read -r initialized
+IFS= read -r list_tools
+sleep 60
+"#;
+        let (_temp, plugin) = fixture_plugin(script);
+
+        let error = PluginRuntime.describe(&plugin).await.unwrap_err();
+
+        assert!(error.to_string().contains("startup timed out"));
     }
 
     #[cfg(unix)]
@@ -730,5 +803,55 @@ exit 9
 
         assert!(!output.contains("very-secret-value"));
         assert!(output.contains("[REDACTED]"));
+    }
+
+    /// 検証: plugin制御のJSON-RPC error dataを診断へ出さずmessageもbounded/redactedにする
+    /// 理由: error chainはrecommend allのstructured logへ永続化されるため
+    /// リスク: credential漏えいと最大frame相当のlog膨張
+    #[test]
+    fn json_rpc_error_diagnostic_is_bounded_and_redacted() {
+        let secret = "cookie-value";
+        let error = json!({
+            "code": -32000,
+            "message": format!("{secret}{}", "x".repeat(32 * 1024)),
+            "data": {"credential": secret}
+        });
+
+        let output = sanitize_json_rpc_error(&error, &[secret.to_string()]);
+
+        assert!(output.contains("code -32000"));
+        assert!(!output.contains(secret));
+        assert!(!output.contains("credential"));
+        assert!(output.len() <= MAX_PLUGIN_DIAGNOSTIC_BYTES + 128);
+    }
+
+    /// 検証: timeout cleanupがpluginから起動された同一process-groupの子も終了する
+    /// 理由:直系processだけのkillではresource handleを持つ孫processが残るため
+    /// リスク:繰り返しtimeoutでorphan processが蓄積する
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminate_process_tree_kills_descendants() {
+        let temp = tempfile::tempdir().unwrap();
+        let pid_file = temp.path().join("descendant.pid");
+        let script = format!("sleep 60 & echo $! > '{}'; wait", pid_file.display());
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(script);
+        let mut child = command.group_spawn().unwrap();
+        for _ in 0..100 {
+            if pid_file.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let descendant = std::fs::read_to_string(&pid_file).unwrap();
+
+        child.kill().await.unwrap();
+
+        let status = std::process::Command::new("kill")
+            .args(["-0", descendant.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(!status.success(), "descendant process remained alive");
     }
 }

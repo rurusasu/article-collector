@@ -72,7 +72,7 @@ impl PluginSourceCatalog {
     pub fn load(store: &InstalledPluginStore) -> Result<Self> {
         let mut catalog = Self::default();
         for installed in store.list()? {
-            let plugin = store.resolve_runtime_plugin(installed)?;
+            let plugin = store.resolve_runtime_plugin_path(installed)?;
 
             for source in plugin.manifest.sources.clone() {
                 catalog.insert_source(&plugin, source)?;
@@ -250,6 +250,25 @@ mod tests {
         assert_eq!(catalog.resolve("example").unwrap().name, "example");
         assert_eq!(catalog.resolve("ex").unwrap().name, "example");
         assert_eq!(catalog.recommendable_sources(), vec!["example"]);
+    }
+
+    /// 検証: catalog discoveryは欠損executableを起動時failureとして遅延する
+    /// 理由:無関係なbuilt-in sourceとrecommend allのpartial successを維持するため
+    /// リスク:壊れた1 pluginが全recommendationを停止する
+    #[test]
+    fn loads_manifest_when_plugin_executable_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let store =
+            InstalledPluginStore::new(PluginPaths::from_data_root(temp.path().to_path_buf()));
+        store
+            .activate(&installed("example-plugin", "example", &["sample"]))
+            .unwrap();
+
+        let catalog = PluginSourceCatalog::load(&store).unwrap();
+
+        let source = catalog.resolve("sample").unwrap();
+        assert!(source.plugin.executable.is_absolute());
+        assert!(!source.plugin.executable.exists());
     }
 
     /// 検証: built-in名・aliasとの衝突はcatalog構築時に拒否する

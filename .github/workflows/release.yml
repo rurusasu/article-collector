@@ -270,15 +270,38 @@ jobs:
       - name: Refresh and sign exact registry bytes
         shell: bash
         env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
           PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          registry_tag="plugin-registry-v1"
+          source_revision="$(jq -er '.revision' registry/plugins-v1.json)"
+          current_revision=0
+          if gh release view "$registry_tag" >/dev/null 2>&1; then
+            mkdir current-registry
+            gh release download "$registry_tag" \
+              --pattern plugins-v1.json \
+              --pattern plugins-v1.sig \
+              --dir current-registry
+            cargo run --locked --example plugin_registry -- \
+              verify \
+              current-registry/plugins-v1.json \
+              current-registry/plugins-v1.sig \
+              registry/trusted-keys.json
+            current_revision="$(jq -er '.revision' current-registry/plugins-v1.json)"
+          fi
+          if [ "$current_revision" -gt "$source_revision" ]; then
+            next_revision=$((current_revision + 1))
+          else
+            next_revision=$((source_revision + 1))
+          fi
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
           jq \
+            --argjson revision "$next_revision" \
             --arg generated_at "$generated_at" \
             --arg expires_at "$expires_at" \
-            '.revision += 1 | .generated_at = $generated_at | .expires_at = $expires_at' \
+            '.revision = $revision | .generated_at = $generated_at | .expires_at = $expires_at' \
             registry/plugins-v1.json > plugins-v1.json
           cargo run --locked --example plugin_registry -- \
             validate plugins-v1.json registry/trusted-keys.json
