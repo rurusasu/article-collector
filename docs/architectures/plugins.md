@@ -22,9 +22,9 @@ article-collector plugin uninstall example
 
 `install` / `update` は binary に埋め込まれた trust set と official registry
 URL だけを使う。registry URL override、local executable install、third-party
-registry は protocol v1 の対象外である。production trust key と最初の plugin
-entry が provision されるまでは `install` / `update` は明示的な未設定 error
-を返す。
+registry は protocol v1 の対象外である。production trust key は provision
+済みだが、最初の plugin が #85 で release されるまでは registry の `plugins`
+は空で、install 可能な plugin はない。
 
 `uninstall` は指定した plugin の directory だけを削除する。アプリケーション
 からは復元できず、必要になった場合は registry から再 install する。
@@ -173,9 +173,42 @@ publisher は既発行の JSON/signature を download・検証し、
 `plugin-registry-publish` concurrency group で直列化する。
 
 PR CI は schema と development fixture signature だけを検証し、production
-private key を参照しない。production publishing job を有効化する前に repository
-管理者が public key、`PLUGIN_REGISTRY_SIGNING_KEY` secret、protected
-`plugin-registry` environment を provision する必要がある。
+private key を参照しない。production publisher は `needs: build` の既定の
+success 条件に従い、5 target の core build がすべて成功した後だけ実行する。
+publisher は protected `plugin-registry` environment で実行し、
+`plugin-registry-publish` concurrency group で直列化する。実行中の publish は
+cancel しない。concurrency は実行順を保証しないため、publisher は Cargo
+metadata から現在の core tag を導出し、GitHub の draft/prerelease ではない
+release のうち厳密な `v<major>.<minor>.<patch>` tag だけを `publishedAt` で比較
+する。現在の tag が最新の場合だけ refresh/sign と upload を実行し、古い queued
+run は成功のまま両 step を skip する。対象 release が 0 件の場合、または最大の
+`publishedAt` を持つ core release が複数ある場合は、入力順で選ばず安全側に
+失敗する。
+
+### production trust root の provision と recovery
+
+初回だけ、password manager に生成・保存した base64 Ed25519 seed を command の
+標準入力へ直接渡し、public trust set を生成する。
+
+macOS では password manager から seed だけを clipboard へ copy し、次の pipe
+で標準入力へ渡す。`pbpaste` の終了が EOF になるため、追加入力は不要である。
+
+```bash
+pbpaste | cargo run --quiet --locked --example plugin_registry -- \
+  provision-trust-set registry/trusted-keys.json
+```
+
+seed は command argument、file、shell history、output、log へ書かない。
+password manager の値を recovery の正本とし、GitHub の
+protected `plugin-registry` environment に置く
+`PLUGIN_REGISTRY_SIGNING_KEY` は deployment 用の copy とする。environment
+secret を失った場合は password manager から復旧し、public key から private
+seed を復元しようとしない。environment の deployment branch は `main` だけに
+制限する。
+
+初回 production smoke test では公開済み JSON/signature の署名検証が成功し、
+registry が fresh かつ単調増加した revision を持ち、`plugins` が空であることを
+確認する。#85 の release までは空の authenticated registry が正常状態である。
 
 ## 保守と cleanup
 

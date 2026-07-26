@@ -37,6 +37,29 @@ require_not_contains() {
   fi
 }
 
+require_occurrences() {
+  local file="$1"
+  local needle="$2"
+  local expected="$3"
+  local description="$4"
+  local count=0
+  local line
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" == *"$needle"* ]]; then
+      count=$((count + 1))
+    fi
+  done < "$file"
+
+  if [ "$count" -eq "$expected" ]; then
+    echo "PASS: $description"
+  else
+    echo "FAIL: $description" >&2
+    echo "  Expected '$needle' $expected time(s) in $file, found $count" >&2
+    failures=$((failures + 1))
+  fi
+}
+
 require_no_workflow_match() {
   local pattern="$1"
   local description="$2"
@@ -77,9 +100,68 @@ file_contains() {
   return 1
 }
 
+require_selector_output() {
+  local selector="$1"
+  local fixture="$2"
+  local expected="$3"
+  local description="$4"
+  local actual
+
+  if actual="$(jq -er -f "$selector" <<< "$fixture" 2>/dev/null)" &&
+    [ "$actual" = "$expected" ]; then
+    echo "PASS: $description"
+  else
+    echo "FAIL: $description" >&2
+    echo "  Expected selector output '$expected', got '${actual:-<error>}'" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+require_selector_failure() {
+  local selector="$1"
+  local fixture="$2"
+  local description="$3"
+
+  if jq -er -f "$selector" <<< "$fixture" >/dev/null 2>&1; then
+    echo "FAIL: $description" >&2
+    echo "  Selector unexpectedly succeeded" >&2
+    failures=$((failures + 1))
+  else
+    echo "PASS: $description"
+  fi
+}
+
 release=".github/workflows/release.yml"
 ci=".github/workflows/ci.yml"
 pr_checklist=".github/workflows/pr-checklist.yml"
+core_release_selector="scripts/select-latest-core-release.jq"
+
+if [ -f "$core_release_selector" ]; then
+  unique_latest_fixture='[
+    {"tagName":"v1.0.0","publishedAt":"2026-07-01T00:00:00Z","isDraft":false,"isPrerelease":false},
+    {"tagName":"v1.1.0","publishedAt":"2026-07-02T00:00:00Z","isDraft":false,"isPrerelease":false},
+    {"tagName":"plugin-registry-v1","publishedAt":"2026-07-05T00:00:00Z","isDraft":false,"isPrerelease":false},
+    {"tagName":"v2.0.0","publishedAt":"2026-07-06T00:00:00Z","isDraft":true,"isPrerelease":false},
+    {"tagName":"v2.1.0","publishedAt":"2026-07-07T00:00:00Z","isDraft":false,"isPrerelease":true}
+  ]'
+  tied_latest_fixture='[
+    {"tagName":"v1.0.0","publishedAt":"2026-07-02T00:00:00Z","isDraft":false,"isPrerelease":false},
+    {"tagName":"v1.1.0","publishedAt":"2026-07-02T00:00:00Z","isDraft":false,"isPrerelease":false}
+  ]'
+  no_eligible_fixture='[
+    {"tagName":"plugin-registry-v1","publishedAt":"2026-07-05T00:00:00Z","isDraft":false,"isPrerelease":false},
+    {"tagName":"v2.0.0","publishedAt":"2026-07-06T00:00:00Z","isDraft":true,"isPrerelease":false},
+    {"tagName":"v2.1.0","publishedAt":"2026-07-07T00:00:00Z","isDraft":false,"isPrerelease":true}
+  ]'
+
+  require_selector_output "$core_release_selector" "$unique_latest_fixture" "v1.1.0" "core release selector returns the unique latest stable release"
+  require_selector_failure "$core_release_selector" "$tied_latest_fixture" "core release selector fails closed on tied latest publication times"
+  require_selector_failure "$core_release_selector" "$no_eligible_fixture" "core release selector fails closed when no stable core release exists"
+else
+  echo "FAIL: core release selector fixture checks can run" >&2
+  echo "  Missing $core_release_selector" >&2
+  failures=$((failures + 1))
+fi
 
 require_contains "$release" "uses: actions/create-github-app-token@$APP_TOKEN_REF" "release workflow creates a GitHub App token from a pinned action"
 require_contains "$release" "uses: release-plz/action@$RELEASE_PLZ_REF" "release-plz action is pinned"
@@ -109,7 +191,17 @@ require_contains "$release" "PLUGIN_REGISTRY_SIGNING_KEY" "registry signing uses
 require_contains "$release" "environment: plugin-registry" "registry signing is protected by an Actions environment"
 require_not_contains "$ci" "PLUGIN_REGISTRY_SIGNING_KEY" "PR CI cannot access the registry signing key"
 require_contains "$release" "plugin-registry-v1" "registry assets use the stable release tag"
-require_contains "$release" "if: \${{ false }}" "registry publishing remains disabled until production key provisioning"
+require_not_contains "$release" "if: \${{ false }}" "registry publishing is enabled after production key provisioning"
+require_contains "$release" "needs: build" "registry publishing waits for the complete release build matrix"
+require_contains "$release" "id: registry-source-order" "registry publisher checks the current checkout against the latest core release"
+require_contains "$release" "jq -er -f $core_release_selector" "registry publisher runs the fail-closed core release selector"
+require_not_contains "$release" "max_by(.publishedAt)" "registry source ordering does not resolve publication-time ties by input order"
+require_contains "$core_release_selector" "select(.isDraft == false and .isPrerelease == false)" "registry source ordering excludes draft and prerelease releases"
+require_contains "$core_release_selector" 'test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")' "registry source ordering accepts only stable core release tags"
+# The jq variable is intentionally matched literally.
+# shellcheck disable=SC2016
+require_contains "$core_release_selector" '($latest | length) != 1' "registry source ordering fails closed unless the latest publication time is unique"
+require_occurrences "$release" "if: \${{ steps.registry-source-order.outputs.publish == 'true' }}" 2 "registry refresh and upload both require the latest core source"
 require_contains "$release" "gh release download \"\$registry_tag\"" "registry publisher downloads the currently published registry"
 require_contains "$release" "current_revision" "registry publisher derives the next monotonic revision from published state"
 require_contains "$release" "verify-published" "registry publisher can authenticate an expired registry for recovery"

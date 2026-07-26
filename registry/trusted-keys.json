@@ -1,1 +1,7 @@
-[]
+[
+  {
+    "key_id": "ed25519-sha256:a3bcf2bd15c4b4d67667ddca78624015321ea179786bc28b2cbd972fdfa5d02d",
+    "public_key": "bJ3zWFsdnqOJHDm+Jzqg6wRVyFiZG6UfQUpMLlKOoss=",
+    "revoked": false
+  }
+]

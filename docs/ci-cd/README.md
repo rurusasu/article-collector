@@ -17,8 +17,11 @@ graph TB
   exists -->|false| requested{"release-plz PR merge<br/>or manual dispatch"}
   requested -->|true| publish["gh release create<br/>tag / GitHub Release"]
   requested -->|false| noop["no release action"]
-  publish --> build["cross-platform build"]
+  publish --> build["5-target build matrix"]
   build --> upload["upload release assets"]
+  build -->|all 5 successful| sourceorder{"current tag = latest<br/>published core release"}
+  sourceorder -->|true| registry["Publish Plugin Registry<br/>protected plugin-registry environment"]
+  sourceorder -->|false| stale["skip stale registry source"]
 ```
 
 ## CI (`ci.yml`)
@@ -39,6 +42,7 @@ graph TB
 
 通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
 Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、`gh release create` で tag と GitHub Release を作成する。その後、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
+5 target の build matrix がすべて成功すると、protected `plugin-registry` environment の publisher が署名済み official registry を公開する。build が失敗または skip された場合は publisher を実行しない。build 成功後も、現在の Cargo version tag が draft/prerelease を除く最新の published core release である場合だけ公開し、古い queued run は成功のまま refresh/sign と upload を skip する。
 
 `release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v0.7.0` のような形式を使う。
 
@@ -59,12 +63,23 @@ Release PR が merge されると workflow が `Cargo.toml` の version から `
 - GitHub App token の `pull-requests: read` は main commit に対応する Release PR 判定に必要
 - GitHub App token の `pull-requests: write` は Release PR 作成・更新に必要
 - build は `--locked` で `Cargo.lock` の整合性を検証する
+- registry publisher は `needs: build` で 5 target の成功後だけ実行する
+- production signing key は deployment branch を `main` に限定した protected
+  `plugin-registry` environment の secret からだけ参照する
+- publisher は `plugin-registry-publish` concurrency group で直列化し、実行中の
+  publish を cancel しない
+- concurrency は順序を保証しないため、publisher は厳密な
+  `v<major>.<minor>.<patch>` tag を `publishedAt` で比較し、最新 core release
+  だけを公開する。対象 release が 0 件、または最大 `publishedAt` が同一の候補が
+  複数ある場合は fail-closed とする
+- PR CI は public trust set と development fixture だけを検証し、production
+  signing key を参照しない
 
 ## ワークフローファイル
 
 | ファイル | 用途 |
 |---------|------|
 | `.github/workflows/ci.yml` | PR CI |
-| `.github/workflows/release.yml` | Release PR 作成 + GitHub Release + asset build/upload |
+| `.github/workflows/release.yml` | Release PR 作成 + GitHub Release + asset build/upload + protected registry publish |
 | `.github/workflows/pr-checklist.yml` | PR checklist 検証 |
 | `release-plz.toml` | release-plz の git-only release 設定 |

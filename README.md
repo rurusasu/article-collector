@@ -120,10 +120,11 @@ plugin は実行ユーザーと同じ filesystem/network 権限を持つ。insta
 できない。timeout 時は専用 process group/Job Object を終了するが、同一ユーザー
 権限の別 process による data root 改変まで隔離するものではない。
 
-現在は汎用基盤のみで、production trust key と plugin entry は未 provision
-である。この状態の `plugin install` / `plugin update` は未設定 error になる。
-最初の production plugin となる X connector は
-[GitHub #85](https://github.com/rurusasu/article-collector/issues/85) で実装する。
+production trust root は provision 済みで、署名を検証できる official registry
+を利用できる。現在の registry は `plugins` が空で install 可能な plugin は
+まだない。最初の production plugin となる X connector は
+[GitHub #85](https://github.com/rurusasu/article-collector/issues/85) の release
+後に追加される。
 storage、protocol、release/rotation 手順は
 [MCP plugin architecture](docs/architectures/plugins.md) を参照する。
 
