@@ -101,6 +101,7 @@ struct McpSession {
     reader: FramedRead<ChildStdout, JsonRpcMessageCodec<Value>>,
     writer: FramedWrite<ChildStdin, JsonRpcMessageCodec<Value>>,
     stderr: Arc<Mutex<Vec<u8>>>,
+    stderr_redactions: Vec<String>,
     next_id: u64,
 }
 
@@ -137,6 +138,7 @@ impl McpSession {
             .context("Plugin stderr is unavailable")?;
         let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
         tokio::spawn(capture_stderr(stderr, stderr_buffer.clone()));
+        let stderr_redactions = secret_environment_values(&plugin.manifest.environment);
 
         let mut session = Self {
             child,
@@ -149,6 +151,7 @@ impl McpSession {
                 JsonRpcMessageCodec::new_with_max_length(MAX_MCP_FRAME_BYTES),
             ),
             stderr: stderr_buffer,
+            stderr_redactions,
             next_id: 1,
         };
         let initialize = json!({
@@ -233,7 +236,7 @@ impl McpSession {
                 .cloned()
                 .with_context(|| format!("MCP response for '{method}' has no result"));
         }
-        let stderr = sanitized_stderr(&self.stderr).await;
+        let stderr = sanitized_stderr(&self.stderr, &self.stderr_redactions).await;
         bail!("Plugin exited before responding to '{method}'{stderr}")
     }
 
@@ -246,7 +249,7 @@ impl McpSession {
             Ok(status) => {
                 let status = status.context("Failed to wait for plugin process")?;
                 if !status.success() {
-                    let stderr = sanitized_stderr(&self.stderr).await;
+                    let stderr = sanitized_stderr(&self.stderr, &self.stderr_redactions).await;
                     bail!("Plugin exited abnormally with {status}{stderr}");
                 }
             }
@@ -350,16 +353,35 @@ async fn capture_stderr(mut stderr: tokio::process::ChildStderr, buffer: Arc<Mut
     }
 }
 
-async fn sanitized_stderr(buffer: &Arc<Mutex<Vec<u8>>>) -> String {
+async fn sanitized_stderr(buffer: &Arc<Mutex<Vec<u8>>>, secrets: &[String]) -> String {
     let buffer = buffer.lock().await;
     if buffer.is_empty() {
         String::new()
     } else {
-        format!(
-            "; stderr tail: {}",
-            String::from_utf8_lossy(&buffer).replace(['\r', '\n'], " ")
-        )
+        format!("; stderr tail: {}", sanitize_stderr_bytes(&buffer, secrets))
     }
+}
+
+fn sanitize_stderr_bytes(bytes: &[u8], secrets: &[String]) -> String {
+    let mut output = String::from_utf8_lossy(bytes).replace(['\r', '\n'], " ");
+    for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
+        output = output.replace(secret, "[REDACTED]");
+    }
+    output
+}
+
+fn secret_environment_values(allowed: &[String]) -> Vec<String> {
+    allowed
+        .iter()
+        .filter(|name| {
+            let uppercase = name.to_ascii_uppercase();
+            ["TOKEN", "SECRET", "PASSWORD", "API_KEY", "PRIVATE_KEY"]
+                .iter()
+                .any(|part| uppercase.contains(part))
+        })
+        .filter_map(|name| std::env::var(name).ok())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 fn reject_secret_fields(value: &Value) -> Result<()> {
@@ -383,8 +405,11 @@ fn reject_secret_fields(value: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugins::types::{CollectResponse, PluginCandidate};
+    use crate::plugins::types::{
+        CollectResponse, InstalledPlugin, ManifestSource, PluginCandidate, PluginManifest,
+    };
     use rmcp::transport::async_rw::JsonRpcMessageCodec;
+    use semver::{Version, VersionReq};
     use serde_json::{json, Map, Value};
     use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
@@ -489,5 +514,159 @@ mod tests {
         let error =
             structured_content(&json!({"content": [{"type": "text", "text": "{}"}]})).unwrap_err();
         assert!(error.to_string().contains("structuredContent"));
+    }
+
+    #[cfg(unix)]
+    fn fixture_plugin(script: &str) -> (tempfile::TempDir, InstalledPlugin) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let executable = temp.path().join("plugin");
+        std::fs::write(&executable, format!("#!/bin/sh\nset -eu\n{script}\n")).unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+        let plugin = InstalledPlugin {
+            schema_version: 1,
+            registry_revision: 1,
+            name: "example".to_string(),
+            version: Version::parse("1.0.0").unwrap(),
+            executable,
+            manifest: PluginManifest {
+                name: "example".to_string(),
+                version: Version::parse("1.0.0").unwrap(),
+                protocol: VersionReq::parse("^1.0").unwrap(),
+                capabilities: vec!["recommend-source".to_string()],
+                sources: vec![ManifestSource {
+                    name: "example".to_string(),
+                    aliases: vec![],
+                    options_schema: json!({
+                        "type": "object",
+                        "additionalProperties": false
+                    }),
+                }],
+                supports_configuration: false,
+                environment: vec![],
+            },
+        };
+        (temp, plugin)
+    }
+
+    #[cfg(unix)]
+    fn handshake_script(tool_names: &[&str], call_body: Option<&str>) -> String {
+        let tools = tool_names
+            .iter()
+            .map(|name| format!(r#"{{"name":"{name}","inputSchema":{{"type":"object"}}}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut script = format!(
+            r#"
+IFS= read -r initialize
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":"2025-06-18","capabilities":{{}},"serverInfo":{{"name":"fixture","version":"1"}}}}}}'
+IFS= read -r initialized
+IFS= read -r list_tools
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{tools}]}}}}'
+"#
+        );
+        if let Some(call_body) = call_body {
+            script.push_str("IFS= read -r call_tool\n");
+            script.push_str(&format!(
+                "printf '%s\\n' '{}'\n",
+                call_body.replace('\'', "'\\''")
+            ));
+        }
+        script
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn describe_completes_real_mcp_stdio_handshake() {
+        let body = r#"{"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"protocol_version":"1.0.0","name":"example","version":"1.0.0","sources":[{"name":"example","aliases":[],"options_schema":{"type":"object","additionalProperties":false}}],"supports_configuration":false}}}"#;
+        let script = handshake_script(&[DESCRIBE_TOOL, COLLECT_TOOL], Some(body));
+        let (_temp, plugin) = fixture_plugin(&script);
+
+        let descriptor = PluginRuntime.describe(&plugin).await.unwrap();
+
+        assert_eq!(descriptor.name, "example");
+        assert_eq!(descriptor.version, Version::parse("1.0.0").unwrap());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn missing_required_tool_is_rejected_after_initialize() {
+        let script = handshake_script(&[DESCRIBE_TOOL], None);
+        let (_temp, plugin) = fixture_plugin(&script);
+
+        let error = PluginRuntime.describe(&plugin).await.unwrap_err();
+
+        assert!(error.to_string().contains(COLLECT_TOOL));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn initialize_timeout_terminates_hanging_plugin() {
+        let (_temp, plugin) = fixture_plugin("IFS= read -r initialize\nsleep 60");
+
+        let error = PluginRuntime.describe(&plugin).await.unwrap_err();
+
+        assert!(error.to_string().contains("initialize timed out"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn collect_timeout_terminates_hanging_plugin() {
+        let mut script = handshake_script(&[DESCRIBE_TOOL, COLLECT_TOOL], None);
+        script.push_str("IFS= read -r call_tool\nsleep 600\n");
+        let (_temp, plugin) = fixture_plugin(&script);
+        let request = crate::plugins::types::CollectRequest {
+            source: "example".to_string(),
+            limit: 1,
+            options: Map::new(),
+        };
+
+        let error = PluginRuntime.collect(&plugin, request).await.unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn configure_timeout_terminates_hanging_plugin() {
+        let mut script = handshake_script(&[DESCRIBE_TOOL, COLLECT_TOOL, CONFIGURE_TOOL], None);
+        script.push_str("IFS= read -r call_tool\nsleep 600\n");
+        let (_temp, mut plugin) = fixture_plugin(&script);
+        plugin.manifest.supports_configuration = true;
+
+        let error = PluginRuntime.configure(&plugin).await.unwrap_err();
+
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abnormal_exit_reports_bounded_stderr_tail() {
+        let script = r#"
+head -c 300000 /dev/zero | tr '\000' 'x' >&2
+printf '\nfixture-crash\n' >&2
+exit 9
+"#;
+        let (_temp, plugin) = fixture_plugin(script);
+
+        let error = PluginRuntime.describe(&plugin).await.unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("fixture-crash"));
+        assert!(message.len() <= MAX_STDERR_BYTES + 1024);
+    }
+
+    #[test]
+    fn stderr_sanitization_redacts_secret_values() {
+        let output = sanitize_stderr_bytes(
+            b"request failed token=very-secret-value",
+            &["very-secret-value".to_string()],
+        );
+
+        assert!(!output.contains("very-secret-value"));
+        assert!(output.contains("[REDACTED]"));
     }
 }

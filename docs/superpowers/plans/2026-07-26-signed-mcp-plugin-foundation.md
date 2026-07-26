@@ -540,7 +540,7 @@ git commit -m "feat: install plugins transactionally"
 - Produces: `PluginRuntime::{describe,configure,collect,doctor}`.
 - Consumes: absolute installed executable and signed environment allowlist.
 
-- [ ] **Step 1: Read the shared good-test rules and write failing runtime tests**
+- [x] **Step 1: Read the shared good-test rules and write failing runtime tests**
 
 Read `superpowers/test-driven-development/writing-good-tests.md` before editing
 tests. Use RMCP in-memory duplex transports for successful tool behavior and
@@ -569,7 +569,7 @@ output, invalid URL, too many items, 8 KiB title, 1 MiB content, 16 MiB frame,
 10-second initialize timeout, 60-second collect timeout, 300-second configure
 timeout through paused Tokio time, abnormal exit, and 256 KiB stderr truncation.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
@@ -579,7 +579,7 @@ cargo test --locked plugins::runtime::tests
 
 Expected: FAIL because the MCP runtime does not exist.
 
-- [ ] **Step 3: Implement a max-frame transport and lifecycle**
+- [x] **Step 3: Implement a max-frame transport and lifecycle**
 
 Do not use RMCP's default `AsyncRwTransport`, whose line limit is unbounded.
 Implement `BoundedChildTransport` with
@@ -609,7 +609,7 @@ Capture stderr concurrently into a fixed 256 KiB buffer. Include only the
 sanitized tail in errors; redact values for allowed secret-like variable names
 and never include MCP request payloads.
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
 Run:
 
