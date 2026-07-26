@@ -619,7 +619,7 @@ cargo test --locked plugins::runtime::tests
 
 Expected: PASS with no leaked child processes.
 
-- [ ] **Step 5: Commit MCP runtime**
+- [x] **Step 5: Commit MCP runtime**
 
 ```sh
 git add src/plugins
