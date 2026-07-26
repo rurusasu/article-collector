@@ -376,6 +376,7 @@ mod tests {
                         "additionalProperties": false
                     }
                 }],
+                "supports_configuration": false,
                 "environment": []
             },
             "artifacts": {

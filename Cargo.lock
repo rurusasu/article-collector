@@ -101,6 +101,7 @@ name = "article-collector"
 version = "0.6.17"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.23.0",
  "chrono",
  "clap",

@@ -71,6 +71,7 @@ pub struct PluginManifest {
     pub protocol: VersionReq,
     pub capabilities: Vec<String>,
     pub sources: Vec<ManifestSource>,
+    pub supports_configuration: bool,
     #[serde(default)]
     pub environment: Vec<String>,
 }

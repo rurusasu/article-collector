@@ -15,6 +15,10 @@ impl InstalledPluginStore {
         Self { paths }
     }
 
+    pub(crate) fn paths(&self) -> &PluginPaths {
+        &self.paths
+    }
+
     pub fn list(&self) -> Result<Vec<InstalledPlugin>> {
         let root = self.paths.plugins_root();
         self.paths.ensure_safe_plugin_path(&root)?;
@@ -153,6 +157,7 @@ mod tests {
                     "aliases": [],
                     "options_schema": {"type": "object", "additionalProperties": false}
                 }],
+                "supports_configuration": false,
                 "environment": []
             }
         }))

@@ -429,7 +429,7 @@ cargo test --locked plugins::registry::tests
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit registry verification**
+- [x] **Step 5: Commit registry verification**
 
 ```sh
 git add src/plugins registry
@@ -449,7 +449,7 @@ git commit -m "feat: verify signed plugin registry"
 - Consumes: `RegistryClient`, `InstalledPluginStore`, `PluginProbe`.
 - Produces: `PluginInstaller::{install,update,uninstall}` and `InstallOutcome`.
 
-- [ ] **Step 1: Write failing transaction tests with a local HTTP server**
+- [x] **Step 1: Write failing transaction tests with a local HTTP server**
 
 Use a local Tokio TCP fixture server that returns signed registry bytes and
 artifact bytes. Inject a probe that returns a matching descriptor:
@@ -474,7 +474,7 @@ non-HTTPS production artifact URL, probe mismatch, activation failure, pinned
 version behavior, already-current no-op, and preservation of the old active
 version.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
@@ -484,7 +484,7 @@ cargo test --locked plugins::installer::tests
 
 Expected: FAIL because the installer does not exist.
 
-- [ ] **Step 3: Implement bounded streaming download and staging**
+- [x] **Step 3: Implement bounded streaming download and staging**
 
 Stream the response into a `NamedTempFile` in the destination filesystem while
 incrementally updating `Sha256` and counting bytes. Reject the transfer as soon
@@ -508,12 +508,13 @@ If any operation before `activate` fails, drop/cleanup staging and leave
 `installed.json` unchanged. Update reuses install with an active-version
 precondition. Uninstall delegates to the exact-name store operation.
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
 Run:
 
 ```sh
-cargo test --locked plugins::installer::tests plugins::state::tests
+cargo test --locked plugins::installer::tests
+cargo test --locked plugins::state::tests
 ```
 
 Expected: PASS.
