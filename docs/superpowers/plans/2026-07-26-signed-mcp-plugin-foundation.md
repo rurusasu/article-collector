@@ -519,7 +519,7 @@ cargo test --locked plugins::state::tests
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit installer transactions**
+- [x] **Step 5: Commit installer transactions**
 
 ```sh
 git add src/plugins
