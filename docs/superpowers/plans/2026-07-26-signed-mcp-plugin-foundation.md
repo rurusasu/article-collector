@@ -1017,7 +1017,7 @@ git add README.md docs tests/architecture.rs
 git commit -m "docs: document MCP plugin lifecycle"
 ```
 
-- [ ] **Step 6: Update tracking and prepare handoff**
+- [x] **Step 6: Update tracking and prepare handoff**
 
 Update GitHub #84 to reflect the actual implementation, verification,
 release-secret readiness, and cleanup state. Do not mark complete while
