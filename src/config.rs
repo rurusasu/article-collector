@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 
 const DEFAULT_CONFIG_FILE: &str = "article-collector.toml";
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ArticleCollectorConfig {
     pub recommend: RecommendConfig,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecommendConfig {
     pub limit: Option<usize>,
@@ -23,12 +23,13 @@ pub struct RecommendConfig {
     pub source: BTreeMap<String, RecommendSiteConfig>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecommendSiteConfig {
     pub enabled: Option<bool>,
     pub limit: Option<usize>,
     pub query: Option<String>,
+    pub options: Option<toml::Table>,
 }
 
 pub fn load(path: Option<&Path>) -> Result<ArticleCollectorConfig> {
@@ -155,5 +156,27 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("Invalid TOML config"));
+    }
+
+    /// 検証: plugin source 固有の option を型付き TOML 値として保持する
+    /// 理由: core が plugin ごとの schema を知らなくても設定を MCP に渡す必要がある
+    /// リスク: plugin 設定が文字列化・欠落し、runtime schema 検証ができなくなる
+    #[test]
+    fn parses_plugin_source_options_without_accepting_unknown_top_level_keys() {
+        let config = parse_config(
+            r#"
+            [recommend.source.example]
+            limit = 10
+
+            [recommend.source.example.options]
+            mode = "timeline"
+            include_reposts = false
+            "#,
+        )
+        .unwrap();
+
+        let options = config.recommend.source["example"].options.as_ref().unwrap();
+        assert_eq!(options["mode"].as_str(), Some("timeline"));
+        assert_eq!(options["include_reposts"].as_bool(), Some(false));
     }
 }

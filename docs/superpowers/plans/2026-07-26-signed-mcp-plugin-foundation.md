@@ -105,7 +105,7 @@ pub struct PluginSourceCatalog {
 - Produces: `RecommendSiteConfig.options: Option<toml::Table>`.
 - Consumes: existing `serde`, `serde_json`, `toml`, `chrono`, `reqwest`, and `tokio`.
 
-- [ ] **Step 1: Add failing config and protocol serialization tests**
+- [x] **Step 1: Add failing config and protocol serialization tests**
 
 Add tests that prove plugin options remain typed data and contract versions are explicit:
 
@@ -143,17 +143,18 @@ fn registry_contract_rejects_unknown_fields() {
 }
 ```
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
 ```sh
-cargo test --locked config::tests::parses_plugin_source_options_without_accepting_unknown_top_level_keys plugins::types::tests::registry_contract_rejects_unknown_fields
+cargo test --locked config::tests::parses_plugin_source_options_without_accepting_unknown_top_level_keys
+cargo test --locked plugins::types::tests::registry_contract_rejects_unknown_fields
 ```
 
 Expected: FAIL because `options`, the plugin module, and registry types do not exist.
 
-- [ ] **Step 3: Add direct dependencies and contract types**
+- [x] **Step 3: Add direct dependencies and contract types**
 
 Add these dependencies and regenerate `Cargo.lock` with `cargo check`:
 
@@ -211,7 +212,7 @@ Add `mod plugins;` to `src/main.rs`. Add `options: Option<toml::Table>` to
 `RecommendSiteConfig` and change affected config derives from `Eq` to
 `PartialEq` only if `toml::Value` prevents `Eq`.
 
-- [ ] **Step 4: Run GREEN tests and contract unit tests**
+- [x] **Step 4: Run GREEN tests and contract unit tests**
 
 Run:
 

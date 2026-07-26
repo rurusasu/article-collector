@@ -5,6 +5,7 @@ mod fetch;
 mod logging;
 mod paths;
 mod pipeline;
+mod plugins;
 mod recommend;
 mod recommend_artifacts;
 mod recommend_history;
