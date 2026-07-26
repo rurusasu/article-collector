@@ -12,7 +12,7 @@
 
 - GitHub issue [#84](https://github.com/rurusasu/article-collector/issues/84) owns this plan; use branch `feat/84-plugin-foundation`.
 - Do not implement X-specific behavior; GitHub issue #85 owns the X connector.
-- Before production-code edits, create/update the matching Plane parent and sub-issues with purpose, scope, acceptance criteria, validation, release, and cleanup work.
+- Per the user's explicit direction, use GitHub issue #84 as the sole tracker; do not create or update Plane issues.
 - Initial capability is exactly `recommend-source`.
 - Initial registry is one compiled-in official endpoint; do not add URL overrides, local installs, or third-party registries.
 - Plugin protocol is MCP over stdio; plugin stdout is protocol-only.
@@ -981,8 +981,8 @@ Document:
 - staging cleanup and branch/worktree cleanup;
 - #85 as the first production plugin follow-up.
 
-Remove the `Tracking Constraint` note from the design only after Plane is
-synchronized, replacing it with the actual Plane issue identifiers.
+Keep the design's work-tracking section aligned with GitHub issue #84 as the
+sole tracker and do not add Plane references.
 
 - [ ] **Step 4: Run full verification and inspect the diff**
 
@@ -1014,10 +1014,9 @@ git commit -m "docs: document MCP plugin lifecycle"
 
 - [ ] **Step 6: Update tracking and prepare handoff**
 
-Update GitHub #84 and every matching Plane issue/sub-issue status to reflect the
-actual implementation, verification, release-secret readiness, and cleanup
-state. Do not mark complete while registry signing-key provisioning or release
-verification remains incomplete.
+Update GitHub #84 to reflect the actual implementation, verification,
+release-secret readiness, and cleanup state. Do not mark complete while
+registry signing-key provisioning or release verification remains incomplete.
 
 After all checks pass, use `superpowers:requesting-code-review`, then
 `superpowers:verification-before-completion`, and finally

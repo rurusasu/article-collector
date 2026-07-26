@@ -327,11 +327,9 @@ The issue branch is `feat/84-plugin-foundation`. It is removed after merge and
 worktree cleanup. The X connector branch is created later from the main branch
 that contains this foundation.
 
-## Tracking Constraint
+## Work Tracking
 
-Project policy requires matching Plane issues and current statuses before
-implementation begins. During design authoring, the configured
-`plane-app-api-1` container and all other Plane containers were unavailable.
-Implementation must not start until the corresponding Plane parent/sub-issues
-are created or updated with purpose, scope, acceptance criteria, verification,
-release work, and cleanup.
+Per the user's explicit direction, GitHub issue #84 is the sole tracker for
+this foundation. Its body records the purpose, scope, acceptance criteria,
+verification, release work, and cleanup. Plane tracking is intentionally
+omitted.
