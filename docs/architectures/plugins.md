@@ -184,13 +184,16 @@ cancel しない。
 初回だけ、password manager に生成・保存した base64 Ed25519 seed を command の
 標準入力へ直接渡し、public trust set を生成する。
 
+macOS では password manager から seed だけを clipboard へ copy し、次の pipe
+で標準入力へ渡す。`pbpaste` の終了が EOF になるため、追加入力は不要である。
+
 ```bash
-cargo run --locked --example plugin_registry -- \
+pbpaste | cargo run --quiet --locked --example plugin_registry -- \
   provision-trust-set registry/trusted-keys.json
 ```
 
-seed は prompt 後に標準入力へ貼り付け、command argument、file、shell history、
-log へ書かない。password manager の値を recovery の正本とし、GitHub の
+seed は command argument、file、shell history、output、log へ書かない。
+password manager の値を recovery の正本とし、GitHub の
 protected `plugin-registry` environment に置く
 `PLUGIN_REGISTRY_SIGNING_KEY` は deployment 用の copy とする。environment
 secret を失った場合は password manager から復旧し、public key から private
