@@ -3,6 +3,7 @@ use crate::plugins::types::InstalledPlugin;
 use anyhow::{bail, Context, Result};
 use std::fs::{self, File};
 use std::io::{self, Write};
+use std::path::Component;
 use tempfile::NamedTempFile;
 
 #[derive(Debug, Clone)]
@@ -78,6 +79,42 @@ impl InstalledPluginStore {
             );
         }
         Ok(Some(installed))
+    }
+
+    pub fn resolve_runtime_plugin(&self, mut plugin: InstalledPlugin) -> Result<InstalledPlugin> {
+        if plugin.executable.is_absolute()
+            || plugin
+                .executable
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            bail!(
+                "Plugin '{}' has an unsafe executable path '{}'",
+                plugin.name,
+                plugin.executable.display()
+            );
+        }
+        let executable = self
+            .paths
+            .plugin_root(&plugin.name)?
+            .join(&plugin.executable);
+        self.paths.ensure_safe_plugin_path(&executable)?;
+        let metadata = fs::metadata(&executable).with_context(|| {
+            format!(
+                "Plugin '{}' executable does not exist: {}",
+                plugin.name,
+                executable.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            bail!(
+                "Plugin '{}' executable is not a file: {}",
+                plugin.name,
+                executable.display()
+            );
+        }
+        plugin.executable = executable;
+        Ok(plugin)
     }
 
     pub fn activate(&self, installed: &InstalledPlugin) -> Result<()> {

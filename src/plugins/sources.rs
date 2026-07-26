@@ -6,7 +6,6 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::path::Component;
 
 #[derive(Debug, Clone)]
 pub struct PluginSource {
@@ -72,9 +71,8 @@ pub struct PluginSourceCatalog {
 impl PluginSourceCatalog {
     pub fn load(store: &InstalledPluginStore) -> Result<Self> {
         let mut catalog = Self::default();
-        for mut plugin in store.list()? {
-            let executable = resolve_executable(store, &plugin)?;
-            plugin.executable = executable;
+        for installed in store.list()? {
+            let plugin = store.resolve_runtime_plugin(installed)?;
 
             for source in plugin.manifest.sources.clone() {
                 catalog.insert_source(&plugin, source)?;
@@ -132,45 +130,6 @@ impl PluginSourceCatalog {
         self.sources.insert(canonical, plugin_source);
         Ok(())
     }
-}
-
-fn resolve_executable(
-    store: &InstalledPluginStore,
-    plugin: &InstalledPlugin,
-) -> Result<std::path::PathBuf> {
-    if plugin.executable.is_absolute()
-        || plugin
-            .executable
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        bail!(
-            "Plugin '{}' has an unsafe executable path '{}'",
-            plugin.name,
-            plugin.executable.display()
-        );
-    }
-
-    let executable = store
-        .paths()
-        .plugin_root(&plugin.name)?
-        .join(&plugin.executable);
-    store.paths().ensure_safe_plugin_path(&executable)?;
-    let metadata = std::fs::metadata(&executable).with_context(|| {
-        format!(
-            "Plugin '{}' executable does not exist: {}",
-            plugin.name,
-            executable.display()
-        )
-    })?;
-    if !metadata.is_file() {
-        bail!(
-            "Plugin '{}' executable is not a file: {}",
-            plugin.name,
-            executable.display()
-        );
-    }
-    Ok(executable)
 }
 
 pub fn candidate_to_recommendation(

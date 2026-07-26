@@ -76,6 +76,11 @@ enum Commands {
         #[command(subcommand)]
         command: HistoryCommands,
     },
+    /// Install and manage optional source plugins
+    Plugin {
+        #[command(subcommand)]
+        command: plugins::commands::PluginCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -198,6 +203,12 @@ async fn main() -> Result<()> {
                         path.display()
                     );
                 }
+            }
+        }
+        Commands::Plugin { ref command } => {
+            let context = plugins::commands::production_context()?;
+            for line in plugins::commands::execute(&context, command).await? {
+                eprintln!("{line}");
             }
         }
     }

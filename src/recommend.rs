@@ -75,7 +75,7 @@ enum RecommendationTarget<'a> {
         endpoint: DiscoveryEndpoint,
     },
     Plugin {
-        source: PluginSource,
+        source: Box<PluginSource>,
     },
     PageLinks {
         url: &'a str,
@@ -95,7 +95,7 @@ enum SourceBackend {
         site_name: &'static str,
         endpoint: DiscoveryEndpoint,
     },
-    Plugin(PluginSource),
+    Plugin(Box<PluginSource>),
 }
 
 #[derive(Debug, Clone)]
@@ -288,7 +288,7 @@ fn resolve_recommendation_target<'a>(
 
     if let Some(source) = catalog.resolve(target) {
         return Ok(RecommendationTarget::Plugin {
-            source: source.clone(),
+            source: Box::new(source.clone()),
         });
     }
 
@@ -2784,7 +2784,7 @@ fn source_plan_for_plugin(
     source.validate_options(options.as_ref())?;
     Ok(SourcePlan {
         name: source.name.clone(),
-        backend: SourceBackend::Plugin(source.clone()),
+        backend: SourceBackend::Plugin(Box::new(source.clone())),
         limit,
         query: None,
         options,

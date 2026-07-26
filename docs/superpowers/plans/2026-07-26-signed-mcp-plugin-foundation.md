@@ -739,7 +739,7 @@ cargo test --locked plugins::sources::tests recommend::tests sites::tests
 Expected: PASS, including existing Twitter direct API tests until #85 removes
 that backend.
 
-- [ ] **Step 5: Commit recommendation integration**
+- [x] **Step 5: Commit recommendation integration**
 
 ```sh
 git add src/config.rs src/recommend.rs src/sites src/plugins
@@ -760,7 +760,7 @@ git commit -m "feat: collect recommendations from plugins"
 - Produces CLI subcommands: `install`, `list`, `update`, `configure`, `doctor`, `uninstall`.
 - Consumes `PluginInstaller`, `InstalledPluginStore`, and `PluginRuntime`.
 
-- [ ] **Step 1: Write failing CLI parsing and outcome tests**
+- [x] **Step 1: Write failing CLI parsing and outcome tests**
 
 Add tests that use temporary data roots through an injected command context,
 not a production registry URL override:
@@ -793,7 +793,7 @@ Cover unknown plugin, unsupported configure, doctor descriptor failure,
 already-current update, deterministic list order, and explicit uninstall
 summary.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
@@ -803,7 +803,7 @@ cargo test --locked --test plugin_cli
 
 Expected: FAIL because the command tree does not exist.
 
-- [ ] **Step 3: Implement the command tree and orchestration**
+- [x] **Step 3: Implement the command tree and orchestration**
 
 Add Clap enums:
 
@@ -826,7 +826,7 @@ introducing user-facing environment overrides.
 Output one concise result per operation. Uninstall must state the exact removed
 name/version and that the application cannot recover it except by reinstalling.
 
-- [ ] **Step 4: Run GREEN CLI tests**
+- [x] **Step 4: Run GREEN CLI tests**
 
 Run:
 

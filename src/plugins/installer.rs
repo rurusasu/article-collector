@@ -99,10 +99,6 @@ where
         Ok(InstallOutcome::Updated(installed))
     }
 
-    pub fn uninstall(&self, name: &str) -> Result<bool> {
-        self.store.uninstall(name)
-    }
-
     async fn install_transaction(&self, resolved: &ResolvedPlugin) -> Result<InstalledPlugin> {
         let plugin_root = self.store.paths().plugin_root(&resolved.name)?;
         fs::create_dir_all(&plugin_root)

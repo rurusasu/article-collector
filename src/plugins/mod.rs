@@ -1,3 +1,4 @@
+pub mod commands;
 pub mod installer;
 pub mod paths;
 pub mod registry;
