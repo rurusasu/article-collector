@@ -112,6 +112,9 @@ require_contains "$release" "plugin-registry-v1" "registry assets use the stable
 require_contains "$release" "if: \${{ false }}" "registry publishing remains disabled until production key provisioning"
 require_contains "$release" 'gh release download "$registry_tag"' "registry publisher downloads the currently published registry"
 require_contains "$release" "current_revision" "registry publisher derives the next monotonic revision from published state"
+require_contains "$release" "verify-published" "registry publisher can authenticate an expired registry for recovery"
+require_contains "$release" "group: plugin-registry-publish" "registry publisher executions are serialized"
+require_contains "$release" "cancel-in-progress: false" "registry publisher serialization does not cancel an active publish"
 require_contains "$ci" "bash scripts/verify-plugin-registry.sh" "PR CI validates plugin registry without signing"
 
 require_contains "$ci" "permissions:" "CI declares explicit GITHUB_TOKEN permissions"

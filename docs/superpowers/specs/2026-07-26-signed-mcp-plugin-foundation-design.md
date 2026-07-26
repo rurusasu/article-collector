@@ -238,7 +238,9 @@ installed again while available.
 ## Process and Trust Boundaries
 
 - The executable path is canonicalized under the plugin data root and rejected
-  if any path component is a symlink.
+  if any observed path component is a symlink. This prevents path traversal and
+  ordinary symlink substitution, but is not a handle-relative filesystem
+  sandbox against a hostile process running concurrently as the same OS user.
 - The core starts it directly with an argument vector, never through a shell.
 - The child receives a minimal environment: platform basics plus environment
   variable names explicitly declared in the signed manifest. Secret values are

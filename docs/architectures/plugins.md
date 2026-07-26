@@ -167,7 +167,10 @@ registry release は必ず artifact-first で行う。
 
 publisher は既発行の JSON/signature を download・検証し、
 `max(source revision, published revision) + 1` を採番する。同じ source checkout
-から繰り返し実行しても revision を再利用しない。
+から繰り返し実行しても revision を再利用しない。publisher 専用の検証は
+真正性と schema/semantic を要求するが freshness は要求しないため、失効後も
+より大きい revision と新しい expiry へ復旧できる。publish job は
+`plugin-registry-publish` concurrency group で直列化する。
 
 PR CI は schema と development fixture signature だけを検証し、production
 private key を参照しない。production publishing job を有効化する前に repository

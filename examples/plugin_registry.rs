@@ -47,6 +47,12 @@ enum Commands {
         signature: PathBuf,
         trusted_keys: PathBuf,
     },
+    /// Authenticate a previously published registry without requiring freshness
+    VerifyPublished {
+        index: PathBuf,
+        signature: PathBuf,
+        trusted_keys: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -85,6 +91,19 @@ fn main() -> Result<()> {
             verify_bytes(&index_bytes, &signature_bytes, &keys)?;
             println!("Plugin registry signature is valid.");
         }
+        Commands::VerifyPublished {
+            index,
+            signature,
+            trusted_keys,
+        } => {
+            let index_bytes = read_bounded(&index, MAX_REGISTRY_BYTES)?;
+            let signature_bytes = read_bounded(&signature, MAX_SIGNATURE_BYTES)?;
+            let keys = read_trusted_keys(&trusted_keys)?;
+            validate_published_registry_bytes(&index_bytes)?;
+            validate_trusted_keys(&keys)?;
+            verify_bytes(&index_bytes, &signature_bytes, &keys)?;
+            println!("Published plugin registry signature is valid.");
+        }
     }
     Ok(())
 }
@@ -115,18 +134,30 @@ fn validate_registry_bytes(bytes: &[u8], now: DateTime<Utc>) -> Result<RegistryI
     Ok(index)
 }
 
+fn validate_published_registry_bytes(bytes: &[u8]) -> Result<RegistryIndex> {
+    let index: RegistryIndex =
+        serde_json::from_slice(bytes).context("Invalid plugin registry JSON")?;
+    validate_registry_contents(&index)?;
+    Ok(index)
+}
+
 fn validate_registry(index: &RegistryIndex, now: DateTime<Utc>) -> Result<()> {
-    if index.schema_version != REGISTRY_SCHEMA_VERSION {
-        bail!(
-            "Unsupported plugin registry schema {}",
-            index.schema_version
-        );
-    }
+    validate_registry_contents(index)?;
     if index.generated_at > now {
         bail!("Plugin registry was generated in the future");
     }
     if index.expires_at <= now {
         bail!("Plugin registry has expired");
+    }
+    Ok(())
+}
+
+fn validate_registry_contents(index: &RegistryIndex) -> Result<()> {
+    if index.schema_version != REGISTRY_SCHEMA_VERSION {
+        bail!(
+            "Unsupported plugin registry schema {}",
+            index.schema_version
+        );
     }
 
     let mut plugin_names = HashSet::new();
@@ -410,5 +441,26 @@ mod tests {
         let mut revoked = trusted_key(&seed);
         revoked.revoked = true;
         assert!(verify_bytes(&bytes, &signature, &[revoked]).is_err());
+    }
+
+    /// 検証:publisher recoveryは真正な失効registryのschema/semanticを検証できる
+    /// 理由:expiry refresh jobが30日超の停止後にもrevisionを回収する必要があるため
+    /// リスク:失効registryを更新するpublisher自身が永続的に起動不能になる
+    #[test]
+    fn publisher_validation_accepts_expired_but_authentic_registry() {
+        let bytes = serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "revision": 9,
+            "generated_at": "2026-01-01T00:00:00Z",
+            "expires_at": "2026-01-02T00:00:00Z",
+            "plugins": []
+        }))
+        .unwrap();
+
+        assert!(validate_registry_bytes(&bytes, Utc::now()).is_err());
+        assert_eq!(
+            validate_published_registry_bytes(&bytes).unwrap().revision,
+            9
+        );
     }
 }
