@@ -268,7 +268,50 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
 
+      - name: Check registry source order
+        id: registry-source-order
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          current_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r 'first(.packages[] | select(.name == "article-collector") | .version) // empty'
+          )"
+          if [ -z "$current_version" ]; then
+            echo "Could not resolve article-collector version from Cargo metadata" >&2
+            exit 1
+          fi
+          current_tag="v$current_version"
+          latest_core_tag="$(
+            gh release list \
+              --repo "$GITHUB_REPOSITORY" \
+              --limit 1000 \
+              --json tagName,publishedAt,isDraft,isPrerelease |
+              jq -r '
+                [
+                  .[]
+                  | select(.isDraft == false and .isPrerelease == false)
+                  | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                ]
+                | if length == 0 then empty else max_by(.publishedAt).tagName end
+              '
+          )"
+          if [ -z "$latest_core_tag" ]; then
+            echo "Could not resolve the latest published stable core release" >&2
+            exit 1
+          fi
+          if [ "$current_tag" = "$latest_core_tag" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Registry source $current_tag is the latest published core release."
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping stale registry source $current_tag; latest is $latest_core_tag."
+          fi
+
       - name: Refresh and sign exact registry bytes
+        if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ steps.registry-token.outputs.token }}
@@ -312,6 +355,7 @@ jobs:
             verify plugins-v1.json plugins-v1.sig registry/trusted-keys.json
 
       - name: Upload signed registry assets
+        if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ steps.registry-token.outputs.token }}

@@ -19,7 +19,9 @@ graph TB
   requested -->|false| noop["no release action"]
   publish --> build["5-target build matrix"]
   build --> upload["upload release assets"]
-  build -->|all 5 successful| registry["Publish Plugin Registry<br/>protected plugin-registry environment"]
+  build -->|all 5 successful| sourceorder{"current tag = latest<br/>published core release"}
+  sourceorder -->|true| registry["Publish Plugin Registry<br/>protected plugin-registry environment"]
+  sourceorder -->|false| stale["skip stale registry source"]
 ```
 
 ## CI (`ci.yml`)
@@ -40,7 +42,7 @@ graph TB
 
 通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
 Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、`gh release create` で tag と GitHub Release を作成する。その後、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
-5 target の build matrix がすべて成功すると、protected `plugin-registry` environment の publisher が署名済み official registry を公開する。build が失敗または skip された場合は publisher を実行しない。
+5 target の build matrix がすべて成功すると、protected `plugin-registry` environment の publisher が署名済み official registry を公開する。build が失敗または skip された場合は publisher を実行しない。build 成功後も、現在の Cargo version tag が draft/prerelease を除く最新の published core release である場合だけ公開し、古い queued run は成功のまま refresh/sign と upload を skip する。
 
 `release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v0.7.0` のような形式を使う。
 
@@ -66,6 +68,9 @@ Release PR が merge されると workflow が `Cargo.toml` の version から `
   `plugin-registry` environment の secret からだけ参照する
 - publisher は `plugin-registry-publish` concurrency group で直列化し、実行中の
   publish を cancel しない
+- concurrency は順序を保証しないため、publisher は厳密な
+  `v<major>.<minor>.<patch>` tag を `publishedAt` で比較し、最新 core release
+  だけを公開する。対象 release が 0 件の場合は fail-closed とする
 - PR CI は public trust set と development fixture だけを検証し、production
   signing key を参照しない
 

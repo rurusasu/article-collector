@@ -177,7 +177,11 @@ private key を参照しない。production publisher は `needs: build` の既�
 success 条件に従い、5 target の core build がすべて成功した後だけ実行する。
 publisher は protected `plugin-registry` environment で実行し、
 `plugin-registry-publish` concurrency group で直列化する。実行中の publish は
-cancel しない。
+cancel しない。concurrency は実行順を保証しないため、publisher は Cargo
+metadata から現在の core tag を導出し、GitHub の draft/prerelease ではない
+release のうち厳密な `v<major>.<minor>.<patch>` tag だけを `publishedAt` で比較
+する。現在の tag が最新の場合だけ refresh/sign と upload を実行し、古い queued
+run は成功のまま両 step を skip する。対象 release が 0 件なら安全側に失敗する。
 
 ### production trust root の provision と recovery
 

@@ -37,6 +37,29 @@ require_not_contains() {
   fi
 }
 
+require_occurrences() {
+  local file="$1"
+  local needle="$2"
+  local expected="$3"
+  local description="$4"
+  local count=0
+  local line
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    if [[ "$line" == *"$needle"* ]]; then
+      count=$((count + 1))
+    fi
+  done < "$file"
+
+  if [ "$count" -eq "$expected" ]; then
+    echo "PASS: $description"
+  else
+    echo "FAIL: $description" >&2
+    echo "  Expected '$needle' $expected time(s) in $file, found $count" >&2
+    failures=$((failures + 1))
+  fi
+}
+
 require_no_workflow_match() {
   local pattern="$1"
   local description="$2"
@@ -111,6 +134,11 @@ require_not_contains "$ci" "PLUGIN_REGISTRY_SIGNING_KEY" "PR CI cannot access th
 require_contains "$release" "plugin-registry-v1" "registry assets use the stable release tag"
 require_not_contains "$release" "if: \${{ false }}" "registry publishing is enabled after production key provisioning"
 require_contains "$release" "needs: build" "registry publishing waits for the complete release build matrix"
+require_contains "$release" "id: registry-source-order" "registry publisher checks the current checkout against the latest core release"
+require_contains "$release" "select(.isDraft == false and .isPrerelease == false)" "registry source ordering excludes draft and prerelease releases"
+require_contains "$release" 'test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")' "registry source ordering accepts only stable core release tags"
+require_contains "$release" "max_by(.publishedAt).tagName" "registry source ordering uses the latest published core release"
+require_occurrences "$release" "if: \${{ steps.registry-source-order.outputs.publish == 'true' }}" 2 "registry refresh and upload both require the latest core source"
 require_contains "$release" "gh release download \"\$registry_tag\"" "registry publisher downloads the currently published registry"
 require_contains "$release" "current_revision" "registry publisher derives the next monotonic revision from published state"
 require_contains "$release" "verify-published" "registry publisher can authenticate an expired registry for recovery"
