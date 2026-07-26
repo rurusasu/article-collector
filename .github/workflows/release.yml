@@ -245,8 +245,6 @@ jobs:
     concurrency:
       group: plugin-registry-publish
       cancel-in-progress: false
-    # Disabled until the production public key, protected secret, and environment are provisioned.
-    if: ${{ false }}
     runs-on: ubuntu-latest
     environment: plugin-registry
     steps:
