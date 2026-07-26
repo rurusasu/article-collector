@@ -54,6 +54,15 @@ pub struct RegistrySignature {
     pub signature: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedKey {
+    pub key_id: String,
+    pub public_key: String,
+    #[serde(default)]
+    pub revoked: bool,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginManifest {

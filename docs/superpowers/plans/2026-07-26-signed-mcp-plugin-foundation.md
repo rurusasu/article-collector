@@ -325,7 +325,7 @@ cargo test --locked paths::tests
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit path and state support**
+- [x] **Step 5: Commit path and state support**
 
 ```sh
 git add src/paths.rs src/plugins
@@ -346,7 +346,7 @@ git commit -m "feat: add safe plugin state storage"
 - Consumes: `RegistryIndex`, `RegistrySignatureSet`, `TrustedKey`, target string, current protocol version.
 - Produces: `verify_registry`, `resolve_plugin`, `RegistryClient::fetch`.
 
-- [ ] **Step 1: Write failing cryptographic and resolver tests**
+- [x] **Step 1: Write failing cryptographic and resolver tests**
 
 Generate an Ed25519 fixture key in test code with a constant test seed. Sign the
 exact registry bytes and cover success plus every rejection:
@@ -376,7 +376,7 @@ expired metadata, lower cached revision, wrong schema version, duplicate plugin
 name/version, unsupported target, incompatible protocol, and missing pinned
 version.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
@@ -386,7 +386,7 @@ cargo test --locked plugins::registry::tests
 
 Expected: FAIL because registry verification and resolution do not exist.
 
-- [ ] **Step 3: Implement exact-byte Ed25519 verification and strict resolution**
+- [x] **Step 3: Implement exact-byte Ed25519 verification and strict resolution**
 
 Parse the small signature envelope first, decode each base64 signature, and
 verify the original `plugins-v1.json` bytes:
@@ -415,11 +415,11 @@ Implement bounded downloads: registry JSON maximum 2 MiB, signature maximum
 64 KiB, HTTPS only, connect timeout 10 seconds, total timeout 30 seconds.
 
 Commit an empty schema-v1 source index with a finite generated/expiry window.
-Commit `trusted-keys.json` only after the production public key is provisioned;
-the application build must fail with a clear message when the trust set is
-empty in a release build.
+Keep `trusted-keys.json` empty until the production public key is provisioned;
+official install/update commands must fail with a clear message while the
+embedded trust set is empty.
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
 Run:
 

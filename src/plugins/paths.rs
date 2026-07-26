@@ -73,6 +73,17 @@ pub fn plugin_target(os: &str, arch: &str) -> Result<&'static str> {
     }
 }
 
+pub fn plugin_target_from_triple(target: &str) -> Result<&str> {
+    match target {
+        "x86_64-unknown-linux-gnu"
+        | "aarch64-unknown-linux-gnu"
+        | "x86_64-pc-windows-msvc"
+        | "x86_64-apple-darwin"
+        | "aarch64-apple-darwin" => Ok(target),
+        _ => bail!("Unsupported plugin target triple: {target}"),
+    }
+}
+
 pub fn validate_plugin_name(name: &str) -> Result<()> {
     let bytes = name.as_bytes();
     let valid = (1..=64).contains(&bytes.len())
