@@ -191,8 +191,6 @@ Plugin state uses the OS user data directory:
 ```text
 <user-data>/article-collector/
   registry/
-    plugins-v1.json
-    plugins-v1.sig
     state.json
   plugins/
     <plugin-name>/
@@ -312,8 +310,8 @@ cargo build --release --locked
 The release workflow must verify registry schema and signatures but cannot
 expose the signing secret to pull-request jobs. The Ed25519 private key is held
 as a protected GitHub Actions secret available only to the registry publishing
-environment. A scheduled workflow refreshes the signed expiry before it
-elapses, increments the revision, and uploads both registry assets together.
+environment. The protected publishing job refreshes the signed expiry,
+increments the revision, and uploads both registry assets together.
 
 Publishing a plugin follows this order:
 
@@ -331,5 +329,13 @@ that contains this foundation.
 
 Per the user's explicit direction, GitHub issue #84 is the sole tracker for
 this foundation. Its body records the purpose, scope, acceptance criteria,
-verification, release work, and cleanup. Plane tracking is intentionally
-omitted.
+verification, release work, and cleanup. No secondary tracker is used.
+
+## Implementation Status
+
+The generic foundation is implemented on `feat/84-plugin-foundation`.
+Production registry publishing remains deliberately disabled until an
+administrator provisions the Ed25519 public key, protected
+`PLUGIN_REGISTRY_SIGNING_KEY` secret, and protected `plugin-registry`
+environment. The X-specific binary, OAuth flow, timeline mapping, and removal
+of the current direct X collector remain in GitHub #85.

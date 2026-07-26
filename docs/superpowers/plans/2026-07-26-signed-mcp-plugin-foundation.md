@@ -924,7 +924,7 @@ shellcheck scripts/*.sh
 
 Expected: PASS without accessing the production private key.
 
-- [ ] **Step 5: Commit registry operations**
+- [x] **Step 5: Commit registry operations**
 
 ```sh
 git add examples registry scripts Taskfile.yml .github/workflows
@@ -947,7 +947,7 @@ git commit -m "ci: publish signed plugin registry"
 **Interfaces:**
 - Documents plugin protocol v1, registry schema v1, trust boundaries, commands, storage, errors, signing rotation, release ordering, and cleanup.
 
-- [ ] **Step 1: Add failing documentation architecture assertions**
+- [x] **Step 1: Add failing documentation architecture assertions**
 
 Extend `tests/architecture.rs`:
 
@@ -962,7 +962,7 @@ fn plugin_architecture_is_documented_and_indexed() {
 }
 ```
 
-- [ ] **Step 2: Run RED documentation test**
+- [x] **Step 2: Run RED documentation test**
 
 Run:
 
@@ -972,7 +972,7 @@ cargo test --locked --test architecture plugin_architecture_is_documented_and_in
 
 Expected: FAIL because the architecture document is absent.
 
-- [ ] **Step 3: Write user and maintainer documentation**
+- [x] **Step 3: Write user and maintainer documentation**
 
 Document:
 
@@ -989,7 +989,7 @@ Document:
 Keep the design's work-tracking section aligned with GitHub issue #84 as the
 sole tracker and do not add Plane references.
 
-- [ ] **Step 4: Run full verification and inspect the diff**
+- [x] **Step 4: Run full verification and inspect the diff**
 
 Run:
 
@@ -1010,7 +1010,7 @@ git diff --stat main...HEAD
 
 Expected: every command PASS; only #84 files are changed.
 
-- [ ] **Step 5: Commit documentation and verification**
+- [x] **Step 5: Commit documentation and verification**
 
 ```sh
 git add README.md docs tests/architecture.rs

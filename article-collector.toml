@@ -52,3 +52,10 @@ limit = 5
 [recommend.source.github-search]
 limit = 5
 query = "stars:>1000 pushed:>2026-01-01 archived:false"
+
+# Installed plugin source example:
+# [recommend.source.example]
+# limit = 10
+#
+# [recommend.source.example.options]
+# mode = "latest"

@@ -76,6 +76,17 @@ src/
     artifacts.rs
     translation.rs
     pr.rs
+
+  plugins/
+    mod.rs
+    commands.rs
+    installer.rs
+    paths.rs
+    registry.rs
+    runtime.rs
+    sources.rs
+    state.rs
+    types.rs
 ```
 
 ## 責務
@@ -86,6 +97,7 @@ src/
 | `fetch/` | route 機構に従って 1 件の記事 URL を取得する | サイト名付きファイルを置かない。サイト固有の記事 API logic は `sites/<site>.rs` が公開し、`site_article_api.rs` 経由で呼び出す。 |
 | `discovery/` | endpoint 機構に従ってサイトまたはページを記事候補へ変換する | サイト名付きファイルを置かない。endpoint module は汎用的な feed/API 形状を取得し、`sites/<site>.rs` が所有する parser function を呼び出す。 |
 | `pipeline/` | discovery 後の処理 | history filtering、article fetch fan-out、translation、artifact 作成、PR 作成を扱う。 |
+| `plugins/` | optional source plugin の trust/lifecycle 境界 | signed registry、safe local state、transactional install、MCP stdio runtime、dynamic source adapter、management CLI を扱う。site 固有 plugin 実装は core repository に置かない。 |
 | `recommend` command | discovery / pipeline entrypoint | target を解決し、discovery / pipeline 内部処理を呼び出す。 |
 
 ## 信頼できる唯一の定義
@@ -114,6 +126,10 @@ src/
 5. 機構別の `FetchRoute` variant を追加または再利用する。
 6. `docs/sites/<site>.md` を追加する。
 
+core binary の変更なしで追加する optional source は `sites/` に追加せず、
+[plugins.md](plugins.md) の protocol と official registry を使う。built-in site
+と plugin source/alias は共有 namespace を持つ。
+
 ## 実装規約
 
 1. site 固有の知識は `sites/<site>.rs` に置く。
@@ -122,6 +138,7 @@ src/
 4. `pipeline/` は discovery 後の history、fetch fan-out、translation、artifact、PR 作成を扱う。
 5. CLI command は `sites/registry.rs` と discovery / pipeline の基本部品を使う。
 6. 実装は [enums.md](enums.md)、[usage.md](usage.md)、[../sites/README.md](../sites/README.md) の規約にも従う。
+7. plugin executable や X 固有 connector source は `src/plugins/` に埋め込まず、別 artifact として配布する。
 
 ## 対象外
 

@@ -58,6 +58,15 @@ fn site_docs_and_site_modules_have_matching_site_files() {
     assert_eq!(modules, docs);
 }
 
+#[test]
+fn plugin_architecture_is_documented_and_indexed() {
+    let root = manifest_root();
+    let plugin_doc = root.join("docs/architectures/plugins.md");
+    assert!(plugin_doc.exists());
+    let index = fs::read_to_string(root.join("docs/AGENTS.md")).unwrap();
+    assert!(index.contains("architectures/plugins.md"));
+}
+
 fn manifest_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
