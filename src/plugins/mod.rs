@@ -2,6 +2,7 @@ pub mod installer;
 pub mod paths;
 pub mod registry;
 pub mod runtime;
+pub mod sources;
 pub mod state;
 pub mod types;
 

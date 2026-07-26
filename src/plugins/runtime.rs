@@ -53,6 +53,22 @@ impl PluginRuntime {
     ) -> Result<Vec<PluginCandidate>> {
         let maximum = request.limit;
         let mut session = McpSession::start(plugin).await?;
+        let descriptor_result = session
+            .call_tool(DESCRIBE_TOOL, json!({}), COLLECT_TIMEOUT)
+            .await
+            .and_then(|result| {
+                serde_json::from_value::<PluginDescriptor>(structured_content(&result)?.clone())
+                    .context("Invalid structured describe_sources response")
+            })
+            .and_then(|descriptor| {
+                validate_descriptor(&plugin.manifest, &descriptor)?;
+                Ok(descriptor)
+            });
+        if let Err(error) = descriptor_result {
+            let _ = session.close().await;
+            return Err(error);
+        }
+
         let arguments =
             serde_json::to_value(request).context("Failed to encode collect request")?;
         let result = session
@@ -627,6 +643,52 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"tools":[{tools}]}}}}'
         let error = PluginRuntime.collect(&plugin, request).await.unwrap_err();
 
         assert!(error.to_string().contains("timed out"));
+    }
+
+    /// 検証: collect 前に runtime descriptor を signed manifest と照合する
+    /// 理由: install 後に executable の振る舞いが変わっても source contract を再確認するため
+    /// リスク: manifest と異なる source/options contract で候補収集が実行される
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn collect_rejects_runtime_descriptor_mismatch_before_collection() {
+        let body = r#"{"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"protocol_version":"1.0.0","name":"different","version":"1.0.0","sources":[{"name":"example","aliases":[],"options_schema":{"type":"object","additionalProperties":false}}],"supports_configuration":false}}}"#;
+        let script = handshake_script(&[DESCRIBE_TOOL, COLLECT_TOOL], Some(body));
+        let (_temp, plugin) = fixture_plugin(&script);
+        let request = crate::plugins::types::CollectRequest {
+            source: "example".to_string(),
+            limit: 1,
+            options: Map::new(),
+        };
+
+        let error = PluginRuntime.collect(&plugin, request).await.unwrap_err();
+
+        assert!(error.to_string().contains("signed manifest"));
+    }
+
+    /// 検証: descriptor 照合後に同じ MCP session で collect を呼び出す
+    /// 理由: source contract 照合と候補取得の間で別 process に切り替わらないようにするため
+    /// リスク:正しい plugin でも追加 handshake に追従できず収集不能になる
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn collect_describes_then_collects_in_one_mcp_session() {
+        let descriptor = r#"{"jsonrpc":"2.0","id":3,"result":{"structuredContent":{"protocol_version":"1.0.0","name":"example","version":"1.0.0","sources":[{"name":"example","aliases":[],"options_schema":{"type":"object","additionalProperties":false}}],"supports_configuration":false}}}"#;
+        let candidates = r#"{"jsonrpc":"2.0","id":4,"result":{"structuredContent":{"items":[{"title":"Example","url":"https://example.com/article","content":"Body","metadata":{}}]}}}"#;
+        let mut script = handshake_script(&[DESCRIBE_TOOL, COLLECT_TOOL], None);
+        script.push_str("IFS= read -r describe\n");
+        script.push_str(&format!("printf '%s\\n' '{descriptor}'\n"));
+        script.push_str("IFS= read -r collect\n");
+        script.push_str(&format!("printf '%s\\n' '{candidates}'\n"));
+        let (_temp, plugin) = fixture_plugin(&script);
+        let request = crate::plugins::types::CollectRequest {
+            source: "example".to_string(),
+            limit: 1,
+            options: Map::new(),
+        };
+
+        let items = PluginRuntime.collect(&plugin, request).await.unwrap();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Example");
     }
 
     #[cfg(unix)]

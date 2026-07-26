@@ -642,7 +642,7 @@ git commit -m "feat: run plugins over bounded MCP stdio"
 - Produces: `PluginSourceCollector::collect`.
 - Modifies: `RecommendationTarget` and `SourcePlan` to represent built-in or plugin backends.
 
-- [ ] **Step 1: Write failing source resolution and pipeline tests**
+- [x] **Step 1: Write failing source resolution and pipeline tests**
 
 Add tests proving installed plugin sources are dynamic and isolated from static
 site routing:
@@ -673,7 +673,7 @@ rejection, built-in `options` rejection, configured `all` ordering, default
 built-ins-then-sorted-plugins ordering, disabled plugin source, explicit plugin
 failure, and `all` partial failure.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
@@ -683,7 +683,7 @@ cargo test --locked recommend::tests::explicit_plugin_source_enters_existing_his
 
 Expected: FAIL because recommendation targets cannot represent plugin sources.
 
-- [ ] **Step 3: Implement the dynamic source backend**
+- [x] **Step 3: Implement the dynamic source backend**
 
 Change the internal target and plan shape:
 
@@ -728,7 +728,7 @@ fn candidate_to_recommendation(source: &str, rank: usize, candidate: PluginCandi
 
 Keep direct URL routing and static site docs unchanged in this phase.
 
-- [ ] **Step 4: Run GREEN and recommendation regression tests**
+- [x] **Step 4: Run GREEN and recommendation regression tests**
 
 Run:
 
