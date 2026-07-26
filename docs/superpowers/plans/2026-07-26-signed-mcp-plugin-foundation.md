@@ -222,7 +222,7 @@ cargo test --locked config::tests plugins::types::tests
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the contract**
+- [x] **Step 5: Commit the contract**
 
 ```sh
 git add Cargo.toml Cargo.lock src/main.rs src/config.rs src/plugins
@@ -244,7 +244,7 @@ git commit -m "feat: define plugin protocol and registry contracts"
 - Produces: `PluginPaths::from_data_root`, `PluginPaths::system`, `current_plugin_target`, `validate_plugin_name`.
 - Produces: `InstalledPluginStore::{list,get,activate,uninstall}`.
 
-- [ ] **Step 1: Write failing path, target, activation, and symlink tests**
+- [x] **Step 1: Write failing path, target, activation, and symlink tests**
 
 Add table-driven tests for all five targets and state behavior:
 
@@ -276,17 +276,18 @@ On Unix, add a test that inserts a symlink in the plugin path and expects
 `ensure_safe_plugin_path` to reject it. On Windows, add a junction/reparse-point
 metadata rejection test behind `#[cfg(windows)]`.
 
-- [ ] **Step 2: Run RED tests**
+- [x] **Step 2: Run RED tests**
 
 Run:
 
 ```sh
-cargo test --locked plugins::paths::tests plugins::state::tests
+cargo test --locked plugins::paths::tests
+cargo test --locked plugins::state::tests
 ```
 
 Expected: FAIL because the modules and store do not exist.
 
-- [ ] **Step 3: Implement deterministic paths and state transactions**
+- [x] **Step 3: Implement deterministic paths and state transactions**
 
 Use `dirs::data_local_dir()` with `article-collector` appended. Do not reuse the
 temporary artifact directory. Validate plugin names with
@@ -312,12 +313,14 @@ root to the target and reject symlinks/reparse points. `uninstall` accepts only
 a validated installed name, removes its exact directory, and never accepts an
 arbitrary path.
 
-- [ ] **Step 4: Run GREEN tests**
+- [x] **Step 4: Run GREEN tests**
 
 Run:
 
 ```sh
-cargo test --locked plugins::paths::tests plugins::state::tests paths::tests
+cargo test --locked plugins::paths::tests
+cargo test --locked plugins::state::tests
+cargo test --locked paths::tests
 ```
 
 Expected: PASS.

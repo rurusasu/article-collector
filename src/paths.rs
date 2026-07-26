@@ -3,6 +3,10 @@ use std::path::PathBuf;
 pub const TEMP_DIR_ENV: &str = "ARTICLE_COLLECTOR_TEMP_DIR";
 pub const OUTPUT_DIR_ENV: &str = "ARTICLE_COLLECTOR_OUTPUT_DIR";
 
+pub fn plugin_data_root() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|path| path.join("article-collector"))
+}
+
 pub fn temp_dir() -> PathBuf {
     if let Some(path) = temp_dir_from_env() {
         return path;

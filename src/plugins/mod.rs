@@ -1,3 +1,5 @@
+pub mod paths;
+pub mod state;
 pub mod types;
 
 pub const PLUGIN_PROTOCOL_VERSION: &str = "1.0.0";
