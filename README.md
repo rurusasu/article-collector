@@ -98,6 +98,35 @@ fetch のみなら翻訳 agent や GitHub 認証なしで試せる。
 article-collector fetch https://news.ycombinator.com/item?id=42575537
 ```
 
+### Optional source plugin
+
+core binary のインストール後、official signed registry から recommendation
+source plugin を追加できる。
+
+```bash
+article-collector plugin install example
+article-collector plugin install example@1.2.3
+article-collector plugin list
+article-collector plugin update example
+article-collector plugin configure example
+article-collector plugin doctor example
+article-collector plugin uninstall example
+```
+
+plugin は MCP stdio server として別 process で動作する。署名と checksum は
+配布物の publisher/integrity を検証するが、完全な OS sandbox ではないため、
+plugin は実行ユーザーと同じ filesystem/network 権限を持つ。install 元は binary
+に固定された official registry のみで、任意 URL や local executable は指定
+できない。timeout 時は専用 process group/Job Object を終了するが、同一ユーザー
+権限の別 process による data root 改変まで隔離するものではない。
+
+現在は汎用基盤のみで、production trust key と plugin entry は未 provision
+である。この状態の `plugin install` / `plugin update` は未設定 error になる。
+最初の production plugin となる X connector は
+[GitHub #85](https://github.com/rurusasu/article-collector/issues/85) で実装する。
+storage、protocol、release/rotation 手順は
+[MCP plugin architecture](docs/architectures/plugins.md) を参照する。
+
 レコメンド/関連リンクを上位30件集める場合:
 
 ```bash
@@ -276,6 +305,12 @@ export ACP_AGENT="gemini"
 | `article-collector recommend all --config article-collector.toml` | source 別 config を使って推薦記事を収集 | `raw.json` に推薦一覧を作成。`[recommend].sources` が非空なら対象 source をその list に限定し、arXiv query / source 別 limit / 記事本文取得 / PR 作成を config で上書き |
 | `article-collector history clear --config article-collector.toml` | SQLite recommend history を clear | 次回以降の `recommend` で既読記事も再出力可能にする |
 | `article-collector history clear all --config article-collector.toml` | SQLite recommend history と env 指定 artifact directory を clear | `history clear` に加えて、`ARTICLE_COLLECTOR_TEMP_DIR` / `ARTICLE_COLLECTOR_OUTPUT_DIR` と配下ファイルを削除する |
+| `article-collector plugin install <NAME[@VERSION]>` | official signed registry から compatible plugin を install | artifact の byte length/SHA-256 と MCP descriptor を検証後、version を atomic activate |
+| `article-collector plugin list` | installed plugin を名前順で表示 | plugin 名、version、source を表示 |
+| `article-collector plugin update <NAME>` | latest compatible version へ update | current version と同じ場合は no-op |
+| `article-collector plugin configure <NAME>` | OAuth など plugin 所有の対話設定を実行 | 対応 plugin の `article_collector_configure` を呼ぶ |
+| `article-collector plugin doctor <NAME>` | manifest/runtime と local staging を診断 | source descriptor mismatch、process error、stale `.staging-*` を報告 |
+| `article-collector plugin uninstall <NAME>` | exact plugin directory を削除 | アプリ内から復元不可。必要なら registry から再 install |
 
 ## 設定
 
@@ -297,6 +332,18 @@ export ACP_AGENT="gemini"
 ### TOML config
 
 `article-collector.toml` は current directory から自動検出する。明示的に別ファイルを使う場合は `--config <PATH>` を指定する。
+
+plugin source 固有設定は、signed manifest が宣言する JSON Schema に従って
+`options` 配下へ書く。plugin source では `query`、built-in source では
+`options` を使えない。
+
+```toml
+[recommend.source.example]
+limit = 10
+
+[recommend.source.example.options]
+mode = "latest"
+```
 
 ```toml
 [recommend]

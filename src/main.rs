@@ -5,6 +5,7 @@ mod fetch;
 mod logging;
 mod paths;
 mod pipeline;
+mod plugins;
 mod recommend;
 mod recommend_artifacts;
 mod recommend_history;
@@ -74,6 +75,11 @@ enum Commands {
     History {
         #[command(subcommand)]
         command: HistoryCommands,
+    },
+    /// Install and manage optional source plugins
+    Plugin {
+        #[command(subcommand)]
+        command: plugins::commands::PluginCommands,
     },
 }
 
@@ -197,6 +203,12 @@ async fn main() -> Result<()> {
                         path.display()
                     );
                 }
+            }
+        }
+        Commands::Plugin { ref command } => {
+            let context = plugins::commands::production_context()?;
+            for line in plugins::commands::execute(&context, command).await? {
+                eprintln!("{line}");
             }
         }
     }

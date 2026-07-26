@@ -9,6 +9,7 @@
 | [files.md](files.md) | 目標 directory / module 構成。 | file の置き場所を変えるときに更新する。 |
 | [enums.md](enums.md) | `Site`、`DiscoveryEndpoint`、`FetchRoute`、`SaveType`、`ArticleCandidate` の型構造。 | field や enum variant を変えるときに更新する。 |
 | [usage.md](usage.md) | module 間の呼び出し順、所有側と利用側の関係。 | pipeline のつながりや責務境界を変えるときに更新する。 |
+| [plugins.md](plugins.md) | optional source の signed registry、MCP lifecycle、trust boundary。 | plugin source または registry/release を変えるときに更新する。 |
 | [../sites/<site>.md](../sites/README.md) | site ごとの URL 構造、discovery endpoint、article fetch、保存分類。 | site 固有の知識を変えるときに更新する。 |
 | [../AGENTS.md](../AGENTS.md) | docs 全体の索引。 | docs を追加・削除したときに更新する。 |
 
@@ -31,7 +32,22 @@ CLI / config
   -> pipeline/pr.rs
 ```
 
-`recommend` command は target 解決後に `discovery/planner.rs` と pipeline を呼び出し、独自の source namespace を持たない。
+plugin 未使用時の `recommend` command は target 解決後に
+`discovery/planner.rs` と pipeline を呼び出す。
+
+installed plugin がある場合、`recommend` は built-in site と plugin manifest の
+source/alias を 1 つの namespace として解決する。built-in は従来どおり
+`discovery/planner.rs`、plugin は `plugins/sources.rs` と
+`plugins/runtime.rs` を通り、どちらも同じ history 以降の pipeline に合流する。
+
+```text
+CLI / config
+  -> plugins/state.rs の installed manifest index
+  -> plugins/sources.rs の source owner / options validation
+  -> plugins/runtime.rs の MCP initialize / describe / collect
+  -> core-owned source / site / rank
+  -> pipeline/history.rs 以降の共通処理
+```
 
 ## 所有側と利用側
 
@@ -46,6 +62,8 @@ CLI / config
 | `src/fetch/routes/*.rs` | generic web、social status、video transcript、site article API など機構別の単一記事 fetch。 | `src/fetch/router.rs` から呼ばれる。 |
 | `src/save.rs` | fetch 済み content の Markdown 保存分類。 | pipeline の保存処理。 |
 | `src/pipeline/*.rs` | history、artifact、translation、PR 作成など discovery/fetch 後の処理。 | CLI command。 |
+| `src/plugins/registry.rs` / `installer.rs` / `state.rs` | registry trust、artifact 検証、atomic active state。 | `plugin install/update/list/uninstall`。 |
+| `src/plugins/runtime.rs` / `sources.rs` | MCP lifecycle、runtime descriptor 照合、dynamic source candidate 正規化。 | `recommend`、`plugin configure/doctor`。 |
 
 ## site 固有処理の流し方
 
@@ -69,6 +87,7 @@ site 固有の処理は、必ず `src/sites/<site>.rs` を起点にする。
 | fetch route を増やす | `src/sites/types.rs`、`src/fetch/routes/` | [enums.md](enums.md)、[files.md](files.md)、対象の site doc。 |
 | `recommend` の config 規約を変える | `src/config.rs`、CLI command | [enums.md](enums.md)、README、必要なら site docs。 |
 | pipeline の順序を変える | `src/pipeline/` | この [usage.md](usage.md)。 |
+| plugin lifecycle を変える | `src/plugins/` | [plugins.md](plugins.md)、README。 |
 
 ## 境界の確認
 
@@ -76,4 +95,4 @@ site 固有の処理は、必ず `src/sites/<site>.rs` を起点にする。
 - `discovery/endpoints/*.rs` は取得機構の共有処理だけを持つ。
 - `fetch/routes/*.rs` は 1 件の記事取得の共有処理だけを持つ。
 - `ArticleCandidate.site` を source identity とし、別の `source` field は増やさない。
-- `recommend` と将来の pipeline command は同じ discovery / fetch primitive を使う。
+- built-in/plugin の recommendation candidate は同じ history / fetch / translation / save primitive を使う。

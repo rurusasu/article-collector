@@ -15,5 +15,5 @@ VERIFY_RULES=(
   "cargo clippy|clippy|rust.*lint|lint.*rust:::cargo clippy --all-targets -- -D warnings:::Run clippy lints"
   "cargo build|ビルド|build succeeds|build.*成功:::cargo build --release --locked:::Verify release build"
   "GitHub Actions|workflow.*security|release.*automation|hardening:::bash scripts/verify-workflow-security.sh:::Verify GitHub Actions hardening"
-  "shellcheck:::shellcheck scripts/*.sh:::Lint shell scripts"
+  "shellcheck:::if command -v shellcheck >/dev/null 2>&1; then shellcheck -x scripts/*.sh; else nix shell nixpkgs#shellcheck -c shellcheck -x scripts/*.sh; fi:::Lint shell scripts"
 )

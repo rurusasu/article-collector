@@ -123,10 +123,16 @@ tasks:
     cmds:
       - bash scripts/verify-workflow-security.sh
 
+  plugin-registry:
+    desc: "plugin registry schema と署名 fixture を検証"
+    cmds:
+      - bash scripts/verify-plugin-registry.sh
+
   check:
     desc: "CI 相当のローカル検証"
     cmds:
       - task: lint
+      - task: plugin-registry
       - task: test
       - task: build
 
