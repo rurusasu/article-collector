@@ -12,6 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use types::{
     RegistryIndex, RegistryPluginVersion, RegistrySignature, RegistrySignatureSet, TrustedKey,
@@ -31,6 +32,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Derive an initial public trust set from a base64 Ed25519 seed read from stdin
+    ProvisionTrustSet { trusted_keys_output: PathBuf },
     /// Validate registry and public trust-set schemas without private material
     Validate {
         index: PathBuf,
@@ -57,6 +60,21 @@ enum Commands {
 
 fn main() -> Result<()> {
     match Cli::parse().command {
+        Commands::ProvisionTrustSet {
+            trusted_keys_output,
+        } => {
+            let mut encoded = String::new();
+            io::stdin()
+                .take(128)
+                .read_to_string(&mut encoded)
+                .context("Failed to read the plugin registry signing seed from stdin")?;
+            let seed = signing_seed_from_base64(encoded.trim())?;
+            write_initial_trust_set(&trusted_keys_output, &seed)?;
+            println!(
+                "Wrote initial public plugin registry trust set -> {}",
+                trusted_keys_output.display()
+            );
+        }
         Commands::Validate {
             index,
             trusted_keys,
@@ -306,12 +324,38 @@ fn validate_trusted_keys(keys: &[TrustedKey]) -> Result<()> {
 fn signing_seed_from_environment() -> Result<[u8; 32]> {
     let encoded =
         std::env::var(SIGNING_KEY_ENV).with_context(|| format!("{SIGNING_KEY_ENV} is not set"))?;
+    signing_seed_from_base64(&encoded)
+}
+
+fn signing_seed_from_base64(encoded: &str) -> Result<[u8; 32]> {
     let decoded = BASE64_STANDARD
         .decode(encoded)
         .context("Plugin registry signing key is not valid base64")?;
     decoded
         .try_into()
         .map_err(|_| anyhow::anyhow!("Plugin registry signing key must be a 32-byte Ed25519 seed"))
+}
+
+fn trusted_key_from_seed(seed: &[u8; 32]) -> TrustedKey {
+    let public_key = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+    TrustedKey {
+        key_id: key_id(&public_key),
+        public_key: BASE64_STANDARD.encode(public_key),
+        revoked: false,
+    }
+}
+
+fn write_initial_trust_set(path: &Path, seed: &[u8; 32]) -> Result<()> {
+    if path.exists() {
+        let current = read_trusted_keys(path)?;
+        if !current.is_empty() {
+            bail!(
+                "Trusted key output {} already contains a key",
+                path.display()
+            );
+        }
+    }
+    write_json(path, &vec![trusted_key_from_seed(seed)])
 }
 
 fn sign_bytes(bytes: &[u8], seed: &[u8; 32]) -> RegistrySignatureSet {
@@ -404,15 +448,6 @@ mod tests {
         .unwrap()
     }
 
-    fn trusted_key(seed: &[u8; 32]) -> TrustedKey {
-        let public_key = SigningKey::from_bytes(seed).verifying_key().to_bytes();
-        TrustedKey {
-            key_id: key_id(&public_key),
-            public_key: BASE64_STANDARD.encode(public_key),
-            revoked: false,
-        }
-    }
-
     /// 検証: signature は parse 済み JSON ではなく exact registry bytes を対象にする
     /// 理由: publisher と client の意味解釈差で署名対象が変化しないようにするため
     /// リスク:署名後の whitespace/field order 変更を検出できない
@@ -421,7 +456,7 @@ mod tests {
         let seed = [7_u8; 32];
         let bytes = index_bytes();
         let signature = serde_json::to_vec(&sign_bytes(&bytes, &seed)).unwrap();
-        let keys = vec![trusted_key(&seed)];
+        let keys = vec![trusted_key_from_seed(&seed)];
 
         verify_bytes(&bytes, &signature, &keys).unwrap();
 
@@ -437,10 +472,41 @@ mod tests {
         let bytes = index_bytes();
         let signature = serde_json::to_vec(&sign_bytes(&bytes, &seed)).unwrap();
 
-        assert!(verify_bytes(&bytes, &signature, &[trusted_key(&other_seed)]).is_err());
-        let mut revoked = trusted_key(&seed);
+        assert!(verify_bytes(&bytes, &signature, &[trusted_key_from_seed(&other_seed)]).is_err());
+        let mut revoked = trusted_key_from_seed(&seed);
         revoked.revoked = true;
         assert!(verify_bytes(&bytes, &signature, &[revoked]).is_err());
+    }
+
+    #[test]
+    fn derives_trusted_key_from_base64_seed() {
+        let seed = [7_u8; 32];
+        let encoded = BASE64_STANDARD.encode(seed);
+
+        let parsed = signing_seed_from_base64(&encoded).unwrap();
+        let trusted = trusted_key_from_seed(&parsed);
+        let signed = serde_json::to_vec(&sign_bytes(b"registry", &parsed)).unwrap();
+
+        assert_eq!(parsed, seed);
+        assert!(!trusted.revoked);
+        assert_eq!(
+            trusted.key_id,
+            key_id(&SigningKey::from_bytes(&seed).verifying_key().to_bytes())
+        );
+        verify_bytes(b"registry", &signed, &[trusted]).unwrap();
+    }
+
+    #[test]
+    fn initial_trust_set_refuses_to_replace_existing_key() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("trusted-keys.json");
+
+        write_initial_trust_set(&path, &[7_u8; 32]).unwrap();
+        let first = fs::read(&path).unwrap();
+
+        let error = write_initial_trust_set(&path, &[8_u8; 32]).unwrap_err();
+        assert!(error.to_string().contains("already contains a key"));
+        assert_eq!(fs::read(&path).unwrap(), first);
     }
 
     /// 検証:publisher recoveryは真正な失効registryのschema/semanticを検証できる
