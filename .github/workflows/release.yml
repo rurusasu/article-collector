@@ -289,14 +289,7 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --limit 1000 \
               --json tagName,publishedAt,isDraft,isPrerelease |
-              jq -r '
-                [
-                  .[]
-                  | select(.isDraft == false and .isPrerelease == false)
-                  | select(.tagName | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
-                ]
-                | if length == 0 then empty else max_by(.publishedAt).tagName end
-              '
+              jq -er -f scripts/select-latest-core-release.jq
           )"
           if [ -z "$latest_core_tag" ]; then
             echo "Could not resolve the latest published stable core release" >&2

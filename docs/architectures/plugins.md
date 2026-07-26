@@ -181,7 +181,9 @@ cancel しない。concurrency は実行順を保証しないため、publisher 
 metadata から現在の core tag を導出し、GitHub の draft/prerelease ではない
 release のうち厳密な `v<major>.<minor>.<patch>` tag だけを `publishedAt` で比較
 する。現在の tag が最新の場合だけ refresh/sign と upload を実行し、古い queued
-run は成功のまま両 step を skip する。対象 release が 0 件なら安全側に失敗する。
+run は成功のまま両 step を skip する。対象 release が 0 件の場合、または最大の
+`publishedAt` を持つ core release が複数ある場合は、入力順で選ばず安全側に
+失敗する。
 
 ### production trust root の provision と recovery
 

@@ -70,7 +70,8 @@ Release PR が merge されると workflow が `Cargo.toml` の version から `
   publish を cancel しない
 - concurrency は順序を保証しないため、publisher は厳密な
   `v<major>.<minor>.<patch>` tag を `publishedAt` で比較し、最新 core release
-  だけを公開する。対象 release が 0 件の場合は fail-closed とする
+  だけを公開する。対象 release が 0 件、または最大 `publishedAt` が同一の候補が
+  複数ある場合は fail-closed とする
 - PR CI は public trust set と development fixture だけを検証し、production
   signing key を参照しない
 
