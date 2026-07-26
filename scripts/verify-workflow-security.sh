@@ -105,6 +105,12 @@ require_not_contains "$release" "permission-workflows:" "release GitHub App toke
 require_not_contains "$release" "permission-actions:" "release GitHub App token cannot manage Actions"
 require_not_contains "$release" "permission-secrets:" "release GitHub App token cannot manage repository secrets"
 require_not_contains "$release" "app-id:" "release workflow avoids deprecated create-github-app-token app-id input"
+require_contains "$release" "PLUGIN_REGISTRY_SIGNING_KEY" "registry signing uses the protected secret"
+require_contains "$release" "environment: plugin-registry" "registry signing is protected by an Actions environment"
+require_not_contains "$ci" "PLUGIN_REGISTRY_SIGNING_KEY" "PR CI cannot access the registry signing key"
+require_contains "$release" "plugin-registry-v1" "registry assets use the stable release tag"
+require_contains "$release" "if: \${{ false }}" "registry publishing remains disabled until production key provisioning"
+require_contains "$ci" "bash scripts/verify-plugin-registry.sh" "PR CI validates plugin registry without signing"
 
 require_contains "$ci" "permissions:" "CI declares explicit GITHUB_TOKEN permissions"
 require_contains "$ci" "release-pr-scope:" "CI verifies release PR file scope"

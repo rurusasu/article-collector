@@ -837,7 +837,7 @@ cargo test --locked --test cli root_help
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit CLI commands**
+- [x] **Step 5: Commit CLI commands**
 
 ```sh
 git add src/main.rs src/plugins tests/plugin_cli.rs
@@ -862,7 +862,7 @@ git commit -m "feat: add plugin management commands"
 - Produces: `plugin_registry validate`, `sign`, and `verify` commands.
 - Produces: PR-safe schema verification and protected post-merge registry publishing.
 
-- [ ] **Step 1: Write failing publisher and workflow-security checks**
+- [x] **Step 1: Write failing publisher and workflow-security checks**
 
 Add Rust tests for exact-byte signatures and shell checks requiring:
 
@@ -876,7 +876,7 @@ require_contains "$release" "plugin-registry-v1" "registry assets use the stable
 Add `scripts/verify-plugin-registry.sh` initially calling a missing example so
 the test fails for the expected reason.
 
-- [ ] **Step 2: Run RED checks**
+- [x] **Step 2: Run RED checks**
 
 Run:
 
@@ -887,7 +887,7 @@ bash scripts/verify-workflow-security.sh
 
 Expected: FAIL because the publisher and workflow rules are absent.
 
-- [ ] **Step 3: Implement schema validation, protected signing, and upload**
+- [x] **Step 3: Implement schema validation, protected signing, and upload**
 
 `examples/plugin_registry.rs` must:
 
@@ -912,7 +912,7 @@ Do not enable the publishing job until a repository administrator has:
 Update workflow hardening checks so a missing environment, secret reference in
 PR jobs, unpinned action, or excessive token permission fails CI.
 
-- [ ] **Step 4: Run GREEN workflow and registry checks**
+- [x] **Step 4: Run GREEN workflow and registry checks**
 
 Run:
 

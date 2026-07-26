@@ -238,3 +238,69 @@ jobs:
         run: gh release upload ${{ needs.release.outputs.tag_name }} ${{ matrix.artifact }} --clobber
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
+
+  plugin-registry-publish:
+    name: Publish Plugin Registry
+    needs: build
+    # Disabled until the production public key, protected secret, and environment are provisioned.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    environment: plugin-registry
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Create registry release token
+        id: registry-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Refresh and sign exact registry bytes
+        shell: bash
+        env:
+          PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
+          jq \
+            --arg generated_at "$generated_at" \
+            --arg expires_at "$expires_at" \
+            '.revision += 1 | .generated_at = $generated_at | .expires_at = $expires_at' \
+            registry/plugins-v1.json > plugins-v1.json
+          cargo run --locked --example plugin_registry -- \
+            validate plugins-v1.json registry/trusted-keys.json
+          cargo run --locked --example plugin_registry -- \
+            sign plugins-v1.json plugins-v1.sig
+          cargo run --locked --example plugin_registry -- \
+            verify plugins-v1.json plugins-v1.sig registry/trusted-keys.json
+
+      - name: Upload signed registry assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          registry_tag="plugin-registry-v1"
+          if ! gh release view "$registry_tag" >/dev/null 2>&1; then
+            gh release create "$registry_tag" \
+              --target "$GITHUB_SHA" \
+              --title "article-collector plugin registry v1" \
+              --notes "Signed plugin registry assets."
+          fi
+          gh release upload "$registry_tag" \
+            plugins-v1.json \
+            plugins-v1.sig \
+            --clobber
