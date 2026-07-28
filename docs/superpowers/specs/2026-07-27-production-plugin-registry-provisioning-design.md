@@ -10,8 +10,9 @@ GitHub issue
 
 GitHub issue
 [#84](https://github.com/rurusasu/article-collector/issues/84) owns this
-provisioning, release verification, and cleanup phase. Work uses the dedicated
-`feat/84-registry-provision` branch based on `main`.
+provisioning, release verification, and cleanup phase. Initial provisioning
+used `feat/84-registry-provision`; the independent refresh remediation uses
+the dedicated `fix/84-registry-refresh` branch based on verified `main`.
 
 ## Scope
 
@@ -23,6 +24,8 @@ provisioning, release verification, and cleanup phase. Work uses the dedicated
   configured.
 - Release a core binary containing the production trust key.
 - Publish and independently verify an empty signed registry.
+- Keep the signed registry fresh even when no core release occurs for more
+  than 30 days.
 - Close issue #84 and clean up its branches/worktrees only after the
   production verification succeeds.
 
@@ -34,6 +37,7 @@ provisioning, release verification, and cleanup phase. Work uses the dedicated
 - Changing registry schema v1, plugin protocol v1, or the registry endpoint.
 - Introducing KMS, Vault, third-party registries, or user-configurable trust
   roots.
+- Publishing repository registry content from the independent refresh path.
 
 ## Secret and Trust Boundary
 
@@ -82,6 +86,51 @@ and workflow structure but never reference the private secret.
 The initial production registry intentionally contains no plugins. Publishing
 it proves the trust and release path independently of X-specific code.
 
+## Independent Refresh Flow
+
+The release publisher remains the only path that may publish registry content
+from the repository. A separate `Plugin Registry Refresh` workflow keeps the
+already-published content usable during periods without core releases:
+
+1. Run every Monday at `03:17 UTC` and support an explicit
+   `workflow_dispatch`.
+2. Run only from the default branch and use the protected
+   `plugin-registry` environment.
+3. Share the `plugin-registry-publish` concurrency group with the release
+   publisher and never cancel an in-progress publication.
+4. Download `plugins-v1.json` and `plugins-v1.sig` from the stable
+   `plugin-registry-v1` release.
+5. Authenticate the exact downloaded bytes with the committed trust set.
+   Expiry is ignored only for this authenticated recovery operation; schema,
+   signing key, and signature checks remain mandatory.
+6. Preserve the complete published registry payload and change only
+   `revision`, `generated_at`, and `expires_at`.
+7. Set `revision` to the authenticated published revision plus one, set
+   `generated_at` to the current UTC time, and set `expires_at` to 30 days
+   later.
+8. Sign the refreshed exact bytes using the protected environment secret,
+   verify them again, and replace both stable release assets.
+
+The weekly cadence leaves at least a 23-day buffer before the 30-day expiry.
+If a scheduled run fails, GitHub Actions reports the failure and a maintainer
+can use the same manual dispatch path after correcting the cause.
+
+The refresh workflow must not read `registry/plugins-v1.json` as publication
+input. Consequently, merging future plugin metadata into `main` cannot expose
+that plugin before the corresponding core release publisher runs.
+
+## Considered Alternatives
+
+- Add a refresh mode to the existing Release workflow. This reuses more YAML,
+  but couples release/build conditions to a recovery path and makes it easier
+  to accidentally publish repository content without a core release.
+- Extend the registry expiry substantially. This reduces immediate failures
+  but does not provide continuous operation or an authenticated recovery
+  mechanism.
+
+The separate workflow is selected because its input boundary is explicit:
+published authenticated content in, refreshed metadata out.
+
 ## Failure Handling
 
 - A missing secret, invalid seed, public/private key mismatch, signing error,
@@ -90,6 +139,11 @@ it proves the trust and release path independently of X-specific code.
   trusted.
 - No upload occurs until local signing and verification both succeed.
 - The publisher never reuses or decreases a published revision.
+- The independent refresh fails closed when the stable registry assets are
+  missing, malformed, signed by an untrusted key, or fail signature
+  verification.
+- A refresh never falls back to repository registry content and never uploads
+  before payload-preservation, signing, and exact-byte verification succeed.
 - A failed publication leaves issue #84 open and retains its branches and
   worktrees for diagnosis.
 - A failed core release does not run the registry publisher because the
@@ -125,6 +179,9 @@ Production smoke verification:
   empty `plugins` array.
 - The published signature verifies against the public key embedded in the
   released core.
+- A manual independent refresh increments the authenticated revision, extends
+  the expiry, preserves the non-metadata registry payload, and produces a
+  signature that verifies against the production trust set.
 - `article-collector plugin install x` reaches the authenticated registry and
   fails with an unknown-plugin error rather than an unprovisioned trust,
   download, expiry, or signature error.
@@ -133,8 +190,8 @@ Production smoke verification:
 
 ## Release and Cleanup
 
-Issue #84 remains open until the production smoke verification passes. After
-success:
+Issue #84 remains open until both the release publication smoke and the
+independent manual refresh verification pass. After success:
 
 1. record the core release, registry release, revision, and verification
    evidence in issue #84;
