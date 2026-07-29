@@ -45,11 +45,13 @@ require_occurrences() {
   local count=0
   local line
 
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [[ "$line" == *"$needle"* ]]; then
-      count=$((count + 1))
-    fi
-  done < "$file"
+  if [ -f "$file" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [[ "$line" == *"$needle"* ]]; then
+        count=$((count + 1))
+      fi
+    done < "$file"
+  fi
 
   if [ "$count" -eq "$expected" ]; then
     echo "PASS: $description"
@@ -90,6 +92,8 @@ file_contains() {
   local file="$1"
   local needle="$2"
   local line
+
+  [ -f "$file" ] || return 1
 
   while IFS= read -r line || [ -n "$line" ]; do
     if [[ "$line" == *"$needle"* ]]; then
@@ -135,6 +139,8 @@ release=".github/workflows/release.yml"
 ci=".github/workflows/ci.yml"
 pr_checklist=".github/workflows/pr-checklist.yml"
 core_release_selector="scripts/select-latest-core-release.jq"
+refresh=".github/workflows/plugin-registry-refresh.yml"
+refresh_filter="scripts/refresh-plugin-registry.jq"
 
 if [ -f "$core_release_selector" ]; then
   unique_latest_fixture='[
@@ -160,6 +166,92 @@ if [ -f "$core_release_selector" ]; then
 else
   echo "FAIL: core release selector fixture checks can run" >&2
   echo "  Missing $core_release_selector" >&2
+  failures=$((failures + 1))
+fi
+
+require_contains "$refresh" 'cron: "17 3 * * 1"' "registry refresh runs weekly before the 30-day expiry"
+require_contains "$refresh" "workflow_dispatch:" "registry refresh supports manual recovery"
+require_contains "$refresh" "github.event.repository.default_branch" "registry refresh is limited to the default branch"
+require_contains "$refresh" "environment: plugin-registry" "registry refresh uses the protected environment"
+require_contains "$refresh" "group: plugin-registry-publish" "registry refresh shares publisher serialization"
+require_contains "$refresh" "cancel-in-progress: false" "registry refresh never cancels an active publisher"
+require_contains "$refresh" "verify-published" "registry refresh authenticates published bytes before reuse"
+require_contains "$refresh" "jq -er" "registry refresh applies the checked-in metadata filter"
+require_contains "$refresh" "-f $refresh_filter" "registry refresh uses the tested metadata filter"
+require_contains "$refresh" "gh release upload \"\$registry_tag\"" "registry refresh replaces stable release assets"
+require_not_contains "$refresh" "registry/plugins-v1.json" "registry refresh never publishes repository registry content"
+require_occurrences "$refresh" "PLUGIN_REGISTRY_SIGNING_KEY" 1 "registry refresh exposes the signing key to one step only"
+
+refresh_fixture='{
+  "schema_version": 1,
+  "revision": 7,
+  "generated_at": "2026-07-26T00:00:00Z",
+  "expires_at": "2026-08-26T00:00:00Z",
+  "plugins": [{
+    "name": "example",
+    "versions": [{
+      "version": "1.0.0",
+      "protocol": ">=1.0.0, <2.0.0",
+      "manifest": {
+        "name": "example",
+        "version": "1.0.0",
+        "protocol": ">=1.0.0, <2.0.0",
+        "capabilities": ["recommend-source"],
+        "sources": [{
+          "name": "example",
+          "aliases": ["sample"],
+          "options_schema": {
+            "type": "object",
+            "additionalProperties": false
+          }
+        }],
+        "supports_configuration": false,
+        "environment": []
+      },
+      "artifacts": {
+        "aarch64-apple-darwin": {
+          "url": "https://example.com/example-1.0.0",
+          "byte_length": 4,
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    }]
+  }]
+}'
+refreshed_fixture=""
+if [ -f "$refresh_filter" ] &&
+  refreshed_fixture="$(
+    jq -er \
+      --argjson revision 8 \
+      --arg generated_at "2026-07-29T03:17:00Z" \
+      --arg expires_at "2026-08-28T03:17:00Z" \
+      -f "$refresh_filter" \
+      <<< "$refresh_fixture"
+  )"; then
+  if jq -e '
+    .revision == 8
+    and .generated_at == "2026-07-29T03:17:00Z"
+    and .expires_at == "2026-08-28T03:17:00Z"
+  ' <<< "$refreshed_fixture" >/dev/null; then
+    echo "PASS: registry refresh filter replaces only the requested metadata values"
+  else
+    echo "FAIL: registry refresh filter replaces only the requested metadata values" >&2
+    failures=$((failures + 1))
+  fi
+
+  if jq -e -s '
+    (.[0] | del(.revision, .generated_at, .expires_at))
+    ==
+    (.[1] | del(.revision, .generated_at, .expires_at))
+  ' <(printf '%s\n' "$refresh_fixture") <(printf '%s\n' "$refreshed_fixture") >/dev/null; then
+    echo "PASS: registry refresh filter preserves the complete published plugin payload"
+  else
+    echo "FAIL: registry refresh filter preserves the complete published plugin payload" >&2
+    failures=$((failures + 1))
+  fi
+else
+  echo "FAIL: registry refresh filter fixture checks can run" >&2
+  echo "  Missing or invalid $refresh_filter" >&2
   failures=$((failures + 1))
 fi
 

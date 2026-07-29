@@ -172,6 +172,23 @@ publisher は既発行の JSON/signature を download・検証し、
 より大きい revision と新しい expiry へ復旧できる。publish job は
 `plugin-registry-publish` concurrency group で直列化する。
 
+core release と独立した `Plugin Registry Refresh` workflow は毎週月曜
+03:17 UTC と手動 dispatch で実行する。安定版 `plugin-registry-v1` release
+から download した `plugins-v1.json` と `plugins-v1.sig` を
+`verify-published` で認証し、その公開済み JSON だけを refresh の入力にする。
+`verify-published` は recovery のため expiry だけを許容し、schema、trust key、
+signature は通常どおり検証する。認証後は revision を 1 増やし、
+`generated_at` と `expires_at` だけを更新する。完全な `plugins` payload を含む
+その他の値が意味的に同一であることを署名前に検証する。
+
+refresh workflow も protected `plugin-registry` environment と
+`plugin-registry-publish` concurrency group を共有し、実行中の publisher を
+cancel しない。repository の `registry/plugins-v1.json` は core release 時の
+publisher だけが入力にでき、独立 refresh は参照しない。stable release または
+必須 asset が 0 件・欠損・不正な場合、revision が非負整数でない場合、署名検証
+が失敗した場合は、release を作成したり repository 内容へ fallback したりせず
+fail-closed とする。
+
 PR CI は schema と development fixture signature だけを検証し、production
 private key を参照しない。production publisher は `needs: build` の既定の
 success 条件に従い、5 target の core build がすべて成功した後だけ実行する。
@@ -209,6 +226,18 @@ seed を復元しようとしない。environment の deployment branch は `mai
 初回 production smoke test では公開済み JSON/signature の署名検証が成功し、
 registry が fresh かつ単調増加した revision を持ち、`plugins` が空であることを
 確認する。#85 の release までは空の authenticated registry が正常状態である。
+
+独立 refresh の手動 recovery は Actions の `Plugin Registry Refresh` を
+default branch で dispatch し、成功後に同じ stable release から JSON と
+signature を download して次を確認する。
+
+1. `plugins-v1.json`、`plugins-v1.sig`、`registry/trusted-keys.json` を指定した
+   `cargo run --locked --example plugin_registry -- verify` で署名と freshness が
+   有効である。
+2. revision が実行前より 1 大きく、`generated_at` と `expires_at` が更新されて
+   いる。
+3. 3 metadata field を除いた JSON が実行前の公開済み JSON と意味的に同一で
+   ある。
 
 ## 保守と cleanup
 
