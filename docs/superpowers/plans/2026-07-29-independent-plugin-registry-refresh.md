@@ -4,7 +4,7 @@
 
 **Goal:** Add a protected weekly and manual workflow that refreshes the authenticated published plugin registry without waiting for a core release or exposing repository registry content.
 
-**Architecture:** A dedicated GitHub Actions workflow downloads the stable `plugin-registry-v1` assets, authenticates their exact bytes, changes only revision and timestamps through a checked-in jq filter, signs and verifies the result in the protected environment, and replaces the stable assets. It shares the release publisher's concurrency group, while the existing release publisher remains the only path that may source plugin content from `registry/plugins-v1.json`.
+**Architecture:** A dedicated GitHub Actions workflow downloads the stable `plugin-registry-v1` assets, authenticates their exact bytes, changes only revision and timestamps through the checked-in Rust registry utility, signs and verifies the result in the protected environment, and replaces the stable assets. It shares the release publisher's concurrency group, while the existing release publisher remains the only path that may source plugin content from `registry/plugins-v1.json`.
 
 **Tech Stack:** GitHub Actions, Bash, jq, Rust stable, the existing `plugin_registry` Rust example, GitHub CLI, Task.
 
@@ -18,7 +18,7 @@
 - Authenticate the downloaded exact bytes before trusting the published revision or content.
 - Expiry may be ignored only by `verify-published`; schema, trust-key, and signature verification remain mandatory.
 - Preserve every published registry field except `revision`, `generated_at`, and `expires_at`.
-- Set revision to the authenticated published revision plus one and expiry to 30 days after generation.
+- Set revision with Rust `u64::checked_add(1)` so `u64::MAX` fails closed, and derive generation plus expiry from one UTC instant so expiry is exactly 30 days later.
 - Never read `registry/plugins-v1.json` as the independent refresh publication input.
 - Keep `PLUGIN_REGISTRY_SIGNING_KEY` scoped to the sign-and-verify step and out of PR workflows and logs.
 - Never retrieve, display, search for, or write the production signing seed.
@@ -32,25 +32,24 @@
 
 **Files:**
 - Create: `.github/workflows/plugin-registry-refresh.yml`
-- Create: `scripts/refresh-plugin-registry.jq`
+- Modify: `examples/plugin_registry.rs`
 - Modify: `scripts/verify-workflow-security.sh`
 - Modify: `docs/architectures/plugins.md`
 - Modify: `docs/ci-cd/README.md`
 
 **Interfaces:**
 - Consumes: stable release assets `plugin-registry-v1/plugins-v1.json` and `plugin-registry-v1/plugins-v1.sig`; `registry/trusted-keys.json`; protected secret `PLUGIN_REGISTRY_SIGNING_KEY`.
-- Produces: refreshed `plugins-v1.json` and `plugins-v1.sig` on the same stable release; workflow name `Plugin Registry Refresh`; jq filter `scripts/refresh-plugin-registry.jq`.
+- Produces: refreshed `plugins-v1.json` and `plugins-v1.sig` on the same stable release; workflow name `Plugin Registry Refresh`; Rust subcommand `refresh-metadata <published-index> <refreshed-output> <generated-at>`.
 
 - [ ] **Step 1: Add failing executable workflow-security tests**
 
-Extend `scripts/verify-workflow-security.sh` before creating either production file. Define:
+Extend `scripts/verify-workflow-security.sh` before creating the production workflow. Define:
 
 ```bash
 refresh=".github/workflows/plugin-registry-refresh.yml"
-refresh_filter="scripts/refresh-plugin-registry.jq"
 ```
 
-Add guards that fail when the workflow or filter is absent and require:
+Add guards that fail when the workflow is absent and require:
 
 ```bash
 require_contains "$refresh" 'cron: "17 3 * * 1"' "registry refresh runs weekly before the 30-day expiry"
@@ -60,39 +59,43 @@ require_contains "$refresh" "environment: plugin-registry" "registry refresh use
 require_contains "$refresh" "group: plugin-registry-publish" "registry refresh shares publisher serialization"
 require_contains "$refresh" "cancel-in-progress: false" "registry refresh never cancels an active publisher"
 require_contains "$refresh" "verify-published" "registry refresh authenticates published bytes before reuse"
-require_contains "$refresh" "jq -er" "registry refresh applies the checked-in metadata filter"
-require_contains "$refresh" "-f $refresh_filter" "registry refresh uses the tested metadata filter"
+require_contains "$refresh" "refresh-metadata" "registry refresh uses the checked Rust metadata transformer"
 require_contains "$refresh" "gh release upload \"\$registry_tag\"" "registry refresh replaces stable release assets"
 require_not_contains "$refresh" "registry/plugins-v1.json" "registry refresh never publishes repository registry content"
 require_occurrences "$refresh" "PLUGIN_REGISTRY_SIGNING_KEY" 1 "registry refresh exposes the signing key to one step only"
 ```
 
-Add a fixture containing a non-empty plugin entry. Execute the production jq filter with fixed arguments:
+Before changing production Rust code, add two unit tests to
+`examples/plugin_registry.rs`:
 
-```bash
-jq -er \
-  --argjson revision 8 \
-  --arg generated_at "2026-07-29T03:17:00Z" \
-  --arg expires_at "2026-08-28T03:17:00Z" \
-  -f "$refresh_filter" \
-  <<< "$refresh_fixture"
+```rust
+#[test]
+fn refresh_metadata_reaches_u64_max_and_uses_exact_thirty_day_window() {
+    let generated_at = "2026-07-29T03:17:00Z".parse::<DateTime<Utc>>().unwrap();
+    let mut index = registry_index_with_revision(u64::MAX - 1);
+    let original_plugins = index.plugins.clone();
+
+    refresh_metadata(&mut index, generated_at).unwrap();
+
+    assert_eq!(index.revision, u64::MAX);
+    assert_eq!(index.generated_at, generated_at);
+    assert_eq!(index.expires_at, generated_at + Duration::days(30));
+    assert_eq!(index.plugins, original_plugins);
+}
+
+#[test]
+fn refresh_metadata_fails_closed_at_u64_max() {
+    let generated_at = "2026-07-29T03:17:00Z".parse::<DateTime<Utc>>().unwrap();
+    let mut index = registry_index_with_revision(u64::MAX);
+
+    let error = refresh_metadata(&mut index, generated_at).unwrap_err();
+
+    assert!(error.to_string().contains("revision overflow"));
+}
 ```
 
-Assert:
-
-```jq
-.revision == 8
-and .generated_at == "2026-07-29T03:17:00Z"
-and .expires_at == "2026-08-28T03:17:00Z"
-```
-
-Then compare the input and output after:
-
-```jq
-del(.revision, .generated_at, .expires_at)
-```
-
-They must be semantically equal, including the complete non-empty `plugins` entry.
+The helper fixture must contain a non-empty plugin entry so the first test
+proves payload preservation in the production Rust transformation.
 
 - [ ] **Step 2: Run the new tests and record RED**
 
@@ -100,28 +103,45 @@ Run:
 
 ```bash
 bash scripts/verify-workflow-security.sh
+cargo test --locked --example plugin_registry refresh_metadata
 ```
 
-Expected: non-zero exit caused by the missing refresh workflow/filter and the new refresh requirements, while the pre-existing release security checks remain green.
+Expected: `bash scripts/verify-workflow-security.sh` fails for the missing
+workflow, and the two focused Rust tests fail because `refresh_metadata` is
+not defined. Pre-existing release security checks remain green.
 
-- [ ] **Step 3: Add the minimal metadata filter**
+- [ ] **Step 3: Add the checked Rust metadata transformer**
 
-Create `scripts/refresh-plugin-registry.jq`:
+Add the subcommand:
 
-```jq
-if (.revision | type) != "number"
-  or .revision < 0
-  or .revision != (.revision | floor)
-then
-  error("Published registry revision must be a non-negative integer")
-else
-  .revision = $revision
-  | .generated_at = $generated_at
-  | .expires_at = $expires_at
-end
+```rust
+RefreshMetadata {
+    published_index: PathBuf,
+    refreshed_output: PathBuf,
+    generated_at: DateTime<Utc>,
+}
 ```
 
-The workflow computes `$revision` from the authenticated input as `current + 1`; the filter does not accept plugin content from another source.
+Deserialize the already authenticated published index with
+`validate_published_registry_bytes`, then call:
+
+```rust
+fn refresh_metadata(index: &mut RegistryIndex, generated_at: DateTime<Utc>) -> Result<()> {
+    index.revision = index
+        .revision
+        .checked_add(1)
+        .context("Plugin registry revision overflow")?;
+    index.generated_at = generated_at;
+    index.expires_at = generated_at
+        .checked_add_signed(Duration::days(30))
+        .context("Plugin registry expiry overflow")?;
+    Ok(())
+}
+```
+
+Write the refreshed registry with the existing `write_json` helper. The
+command does not accept repository registry content or a separately supplied
+revision/expiry.
 
 - [ ] **Step 4: Add the protected refresh workflow**
 
@@ -174,24 +194,18 @@ cargo run --locked --example plugin_registry -- \
 
 ```bash
 set -euo pipefail
-current_revision="$(
-  jq -er '.revision | select(type == "number" and . >= 0 and . == floor)' \
-    published-registry/plugins-v1.json
-)"
-next_revision=$((current_revision + 1))
+published_dir="published-registry"
 generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
-jq -er \
-  --argjson revision "$next_revision" \
-  --arg generated_at "$generated_at" \
-  --arg expires_at "$expires_at" \
-  -f scripts/refresh-plugin-registry.jq \
-  published-registry/plugins-v1.json > plugins-v1.json
+cargo run --locked --example plugin_registry -- \
+  refresh-metadata \
+  "$published_dir/plugins-v1.json" \
+  plugins-v1.json \
+  "$generated_at"
 jq -e -s '
   (.[0] | del(.revision, .generated_at, .expires_at))
   ==
   (.[1] | del(.revision, .generated_at, .expires_at))
-' published-registry/plugins-v1.json plugins-v1.json
+' "$published_dir/plugins-v1.json" plugins-v1.json
 cargo run --locked --example plugin_registry -- \
   validate plugins-v1.json registry/trusted-keys.json
 ```
@@ -231,7 +245,8 @@ fi
 git diff --check
 ```
 
-Expected: all checks pass. The fixture proves the production filter preserves non-metadata payload.
+Expected: all checks pass. Rust boundary tests prove checked revision
+increment, exact 30-day expiry, and non-metadata payload preservation.
 
 - [ ] **Step 6: Document operation and failure handling**
 
@@ -270,14 +285,14 @@ fi
 git diff --check
 ```
 
-Expected: 276 tests pass, 2 live/configured tests remain ignored, and every static/security check passes.
+Expected: at least 278 tests pass, 2 live/configured tests remain ignored, and every static/security check passes.
 
 Commit:
 
 ```bash
 git add \
   .github/workflows/plugin-registry-refresh.yml \
-  scripts/refresh-plugin-registry.jq \
+  examples/plugin_registry.rs \
   scripts/verify-workflow-security.sh \
   docs/architectures/plugins.md \
   docs/ci-cd/README.md
@@ -519,4 +534,3 @@ fix/84-registry-refresh
 ```
 
 Delete the matching remote branches only if they still exist and both merge-ancestry checks passed. Do not remove unrelated branches or worktrees. Worktree removal is the last filesystem action.
-

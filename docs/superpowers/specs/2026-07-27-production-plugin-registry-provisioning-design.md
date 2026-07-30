@@ -105,10 +105,11 @@ already-published content usable during periods without core releases:
    signing key, and signature checks remain mandatory.
 6. Preserve the complete published registry payload and change only
    `revision`, `generated_at`, and `expires_at`.
-7. Set `revision` to the authenticated published revision plus one, set
-   `generated_at` to the current UTC time, and set `expires_at` to 30 days
-   later.
-8. Sign the refreshed exact bytes using the protected environment secret,
+7. Use the Rust registry utility to increment the authenticated `u64`
+   revision with `checked_add(1)`, failing closed at `u64::MAX`.
+8. Capture one current UTC instant, set it as `generated_at`, and derive
+   `expires_at` as exactly 30 days after that same instant.
+9. Sign the refreshed exact bytes using the protected environment secret,
    verify them again, and replace both stable release assets.
 
 The weekly cadence leaves at least a 23-day buffer before the 30-day expiry.
