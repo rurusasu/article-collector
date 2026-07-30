@@ -62,19 +62,12 @@ jobs:
         run: |
           set -euo pipefail
           published_dir="published-registry"
-          current_revision="$(
-            jq -er '.revision | select(type == "number" and . >= 0 and . == floor)' \
-              "$published_dir/plugins-v1.json"
-          )"
-          next_revision=$((current_revision + 1))
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
-          jq -er \
-            --argjson revision "$next_revision" \
-            --arg generated_at "$generated_at" \
-            --arg expires_at "$expires_at" \
-            -f scripts/refresh-plugin-registry.jq \
-            "$published_dir/plugins-v1.json" > plugins-v1.json
+          cargo run --locked --example plugin_registry -- \
+            refresh-metadata \
+            "$published_dir/plugins-v1.json" \
+            plugins-v1.json \
+            "$generated_at"
           jq -e -s '
             (.[0] | del(.revision, .generated_at, .expires_at))
             ==

@@ -177,17 +177,19 @@ core release と独立した `Plugin Registry Refresh` workflow は毎週月曜
 から download した `plugins-v1.json` と `plugins-v1.sig` を
 `verify-published` で認証し、その公開済み JSON だけを refresh の入力にする。
 `verify-published` は recovery のため expiry だけを許容し、schema、trust key、
-signature は通常どおり検証する。認証後は revision を 1 増やし、
-`generated_at` と `expires_at` だけを更新する。完全な `plugins` payload を含む
-その他の値が意味的に同一であることを署名前に検証する。
+signature は通常どおり検証する。認証後は Rust publisher utility が revision を
+`u64` として checked increment し、単一の `generated_at` から正確に 30 日後の
+`expires_at` を算出する。revision または expiry が overflow する場合は
+fail-closed とする。完全な `plugins` payload を含むその他の値が意味的に同一で
+あることを署名前に検証する。
 
 refresh workflow も protected `plugin-registry` environment と
 `plugin-registry-publish` concurrency group を共有し、実行中の publisher を
 cancel しない。repository の `registry/plugins-v1.json` は core release 時の
 publisher だけが入力にでき、独立 refresh は参照しない。stable release または
-必須 asset が 0 件・欠損・不正な場合、revision が非負整数でない場合、署名検証
-が失敗した場合は、release を作成したり repository 内容へ fallback したりせず
-fail-closed とする。
+必須 asset が 0 件・欠損・不正な場合、revision が `u64` でないか increment
+できない場合、timestamp が overflow する場合、署名検証が失敗した場合は、
+release を作成したり repository 内容へ fallback したりせず fail-closed とする。
 
 PR CI は schema と development fixture signature だけを検証し、production
 private key を参照しない。production publisher は `needs: build` の既定の

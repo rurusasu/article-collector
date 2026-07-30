@@ -87,16 +87,17 @@ core release が 30 日以上ない期間も official registry を fresh に保�
 workflow は stable `plugin-registry-v1` release の公開済み
 `plugins-v1.json` / `plugins-v1.sig` だけを download し、expiry を recovery
 目的で許容する `verify-published` で schema、trust key、signature を認証する。
-repository の registry 内容へ fallback せず、revision と生成・失効時刻だけを
-更新し、その他の payload が意味的に同一であることを確認してから exact bytes
-を再署名する。
+repository の registry 内容へ fallback せず、Rust utility が revision を
+`u64` として checked increment し、単一の生成時刻から正確に 30 日後の失効時刻
+を算出する。その他の payload が意味的に同一であることを確認してから exact
+bytes を再署名する。
 
 release publisher と同じ protected `plugin-registry` environment および
 `plugin-registry-publish` concurrency group を使い、実行中の publish は
 cancel しない。stable release がない、必須 asset が 0 件または欠損・不正、
-revision が非負整数でない、signature が不正、payload preservation または
-再署名後の検証が失敗した場合は upload せず fail-closed とする。stable release
-自体は作成しない。
+revision が `u64` でないか increment できない、timestamp が overflow する、
+signature が不正、payload preservation または再署名後の検証が失敗した場合は
+upload せず fail-closed とする。stable release 自体は作成しない。
 
 手動 recovery では Actions の `Plugin Registry Refresh` を `main` で dispatch
 する。実行前の assets を別途保存し、workflow 成功後は空の作業 directory へ
