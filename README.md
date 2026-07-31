@@ -125,6 +125,15 @@ production trust root は provision 済みで、署名を検証できる officia
 まだない。最初の production plugin となる X connector は
 [GitHub #85](https://github.com/rurusasu/article-collector/issues/85) の release
 後に追加される。
+
+official registry は core release と独立して毎週月曜 03:17 UTC に refresh
+され、手動 recovery もできる。refresh は公開済みで署名検証済みの registry
+assets だけを入力にし、revision と timestamps 以外の plugin payload を変更
+しない。現在の refresh signer は single-key 境界のため、認証済み signature が
+複数ある key rotation overlap 中は既存 assets を置換せず fail-closed とする。
+full multi-key overlap 対応は
+[GitHub #92](https://github.com/rurusasu/article-collector/issues/92) で追跡する。
+
 storage、protocol、release/rotation 手順は
 [MCP plugin architecture](docs/architectures/plugins.md) を参照する。
 

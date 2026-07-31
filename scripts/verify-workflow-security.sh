@@ -140,6 +140,7 @@ ci=".github/workflows/ci.yml"
 pr_checklist=".github/workflows/pr-checklist.yml"
 core_release_selector="scripts/select-latest-core-release.jq"
 refresh=".github/workflows/plugin-registry-refresh.yml"
+single_signature_filter="scripts/require-single-registry-signature.jq"
 
 if [ -f "$core_release_selector" ]; then
   unique_latest_fixture='[
@@ -175,10 +176,21 @@ require_contains "$refresh" "environment: plugin-registry" "registry refresh use
 require_contains "$refresh" "group: plugin-registry-publish" "registry refresh shares publisher serialization"
 require_contains "$refresh" "cancel-in-progress: false" "registry refresh never cancels an active publisher"
 require_contains "$refresh" "verify-published" "registry refresh authenticates published bytes before reuse"
+require_contains "$refresh" "-f $single_signature_filter" "registry refresh rejects multi-signature overlap before transformation"
 require_contains "$refresh" "refresh-metadata" "registry refresh uses the checked Rust metadata transformer"
 require_contains "$refresh" "gh release upload \"\$registry_tag\"" "registry refresh replaces stable release assets"
 require_not_contains "$refresh" "registry/plugins-v1.json" "registry refresh never publishes repository registry content"
 require_occurrences "$refresh" "PLUGIN_REGISTRY_SIGNING_KEY" 1 "registry refresh exposes the signing key to one step only"
+
+require_selector_output \
+  "$single_signature_filter" \
+  '{"schema_version":1,"signatures":[{"key_id":"only","signature":"AA=="}]}' \
+  "only" \
+  "registry refresh accepts one authenticated signing key"
+require_selector_failure \
+  "$single_signature_filter" \
+  '{"schema_version":1,"signatures":[{"key_id":"old","signature":"AA=="},{"key_id":"new","signature":"AA=="}]}' \
+  "registry refresh fails closed during multi-key overlap"
 
 require_contains "$release" "uses: actions/create-github-app-token@$APP_TOKEN_REF" "release workflow creates a GitHub App token from a pinned action"
 require_contains "$release" "uses: release-plz/action@$RELEASE_PLZ_REF" "release-plz action is pinned"

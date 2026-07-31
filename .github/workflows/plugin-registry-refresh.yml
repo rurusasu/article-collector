@@ -56,6 +56,9 @@ jobs:
             "$published_dir/plugins-v1.json" \
             "$published_dir/plugins-v1.sig" \
             registry/trusted-keys.json
+          jq -er \
+            -f scripts/require-single-registry-signature.jq \
+            "$published_dir/plugins-v1.sig" >/dev/null
 
       - name: Refresh metadata and prove payload preservation
         shell: bash
