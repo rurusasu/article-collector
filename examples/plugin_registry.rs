@@ -5,7 +5,7 @@ mod types;
 
 use anyhow::{bail, Context, Result};
 use base64::prelude::{Engine as _, BASE64_STANDARD};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::Value;
@@ -55,6 +55,12 @@ enum Commands {
         index: PathBuf,
         signature: PathBuf,
         trusted_keys: PathBuf,
+    },
+    /// Refresh revision and timestamps from an authenticated published registry
+    RefreshMetadata {
+        published_index: PathBuf,
+        refreshed_output: PathBuf,
+        generated_at: DateTime<Utc>,
     },
 }
 
@@ -122,6 +128,20 @@ fn main() -> Result<()> {
             verify_bytes(&index_bytes, &signature_bytes, &keys)?;
             println!("Published plugin registry signature is valid.");
         }
+        Commands::RefreshMetadata {
+            published_index,
+            refreshed_output,
+            generated_at,
+        } => {
+            let index_bytes = read_bounded(&published_index, MAX_REGISTRY_BYTES)?;
+            let mut index = validate_published_registry_bytes(&index_bytes)?;
+            refresh_metadata(&mut index, generated_at)?;
+            write_json(&refreshed_output, &index)?;
+            println!(
+                "Refreshed plugin registry metadata -> {}",
+                refreshed_output.display()
+            );
+        }
     }
     Ok(())
 }
@@ -157,6 +177,18 @@ fn validate_published_registry_bytes(bytes: &[u8]) -> Result<RegistryIndex> {
         serde_json::from_slice(bytes).context("Invalid plugin registry JSON")?;
     validate_registry_contents(&index)?;
     Ok(index)
+}
+
+fn refresh_metadata(index: &mut RegistryIndex, generated_at: DateTime<Utc>) -> Result<()> {
+    index.revision = index
+        .revision
+        .checked_add(1)
+        .context("Plugin registry revision overflow")?;
+    index.generated_at = generated_at;
+    index.expires_at = generated_at
+        .checked_add_signed(Duration::days(30))
+        .context("Plugin registry expiry overflow")?;
+    Ok(())
 }
 
 fn validate_registry(index: &RegistryIndex, now: DateTime<Utc>) -> Result<()> {
@@ -448,6 +480,46 @@ mod tests {
         .unwrap()
     }
 
+    fn registry_index_with_revision(revision: u64) -> RegistryIndex {
+        serde_json::from_value(json!({
+            "schema_version": 1,
+            "revision": revision,
+            "generated_at": "2026-07-26T00:00:00Z",
+            "expires_at": "2026-08-26T00:00:00Z",
+            "plugins": [{
+                "name": "example",
+                "versions": [{
+                    "version": "1.0.0",
+                    "protocol": ">=1.0.0, <2.0.0",
+                    "manifest": {
+                        "name": "example",
+                        "version": "1.0.0",
+                        "protocol": ">=1.0.0, <2.0.0",
+                        "capabilities": ["recommend-source"],
+                        "sources": [{
+                            "name": "example",
+                            "aliases": ["sample"],
+                            "options_schema": {
+                                "type": "object",
+                                "additionalProperties": false
+                            }
+                        }],
+                        "supports_configuration": false,
+                        "environment": []
+                    },
+                    "artifacts": {
+                        "aarch64-apple-darwin": {
+                            "url": "https://example.com/example-1.0.0",
+                            "byte_length": 4,
+                            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        }
+                    }
+                }]
+            }]
+        }))
+        .unwrap()
+    }
+
     /// 検証: signature は parse 済み JSON ではなく exact registry bytes を対象にする
     /// 理由: publisher と client の意味解釈差で署名対象が変化しないようにするため
     /// リスク:署名後の whitespace/field order 変更を検出できない
@@ -528,5 +600,29 @@ mod tests {
             validate_published_registry_bytes(&bytes).unwrap().revision,
             9
         );
+    }
+
+    #[test]
+    fn refresh_metadata_reaches_u64_max_and_uses_exact_thirty_day_window() {
+        let generated_at = "2026-07-29T03:17:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut index = registry_index_with_revision(u64::MAX - 1);
+        let original_plugins = index.plugins.clone();
+
+        refresh_metadata(&mut index, generated_at).unwrap();
+
+        assert_eq!(index.revision, u64::MAX);
+        assert_eq!(index.generated_at, generated_at);
+        assert_eq!(index.expires_at, generated_at + Duration::days(30));
+        assert_eq!(index.plugins, original_plugins);
+    }
+
+    #[test]
+    fn refresh_metadata_fails_closed_at_u64_max() {
+        let generated_at = "2026-07-29T03:17:00Z".parse::<DateTime<Utc>>().unwrap();
+        let mut index = registry_index_with_revision(u64::MAX);
+
+        let error = refresh_metadata(&mut index, generated_at).unwrap_err();
+
+        assert!(error.to_string().contains("revision overflow"));
     }
 }

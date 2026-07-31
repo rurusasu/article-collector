@@ -1,0 +1,103 @@
+name: Plugin Registry Refresh
+
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Refresh Plugin Registry
+    if: ${{ github.repository_owner == 'rurusasu' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    environment: plugin-registry
+    concurrency:
+      group: plugin-registry-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Create registry release token
+        id: registry-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Download and authenticate published registry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          registry_tag="plugin-registry-v1"
+          published_dir="published-registry"
+          mkdir "$published_dir"
+          gh release download "$registry_tag" \
+            --pattern plugins-v1.json \
+            --pattern plugins-v1.sig \
+            --dir "$published_dir"
+          cargo run --locked --example plugin_registry -- \
+            verify-published \
+            "$published_dir/plugins-v1.json" \
+            "$published_dir/plugins-v1.sig" \
+            registry/trusted-keys.json
+          jq -er \
+            -f scripts/require-single-registry-signature.jq \
+            "$published_dir/plugins-v1.sig" >/dev/null
+
+      - name: Refresh metadata and prove payload preservation
+        shell: bash
+        run: |
+          set -euo pipefail
+          published_dir="published-registry"
+          generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cargo run --locked --example plugin_registry -- \
+            refresh-metadata \
+            "$published_dir/plugins-v1.json" \
+            plugins-v1.json \
+            "$generated_at"
+          jq -e -s '
+            (.[0] | del(.revision, .generated_at, .expires_at))
+            ==
+            (.[1] | del(.revision, .generated_at, .expires_at))
+          ' "$published_dir/plugins-v1.json" plugins-v1.json
+          cargo run --locked --example plugin_registry -- \
+            validate plugins-v1.json registry/trusted-keys.json
+
+      - name: Sign and verify exact registry bytes
+        shell: bash
+        env:
+          PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          cargo run --locked --example plugin_registry -- \
+            sign plugins-v1.json plugins-v1.sig
+          cargo run --locked --example plugin_registry -- \
+            verify plugins-v1.json plugins-v1.sig registry/trusted-keys.json
+
+      - name: Upload refreshed registry assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          registry_tag="plugin-registry-v1"
+          gh release upload "$registry_tag" \
+            plugins-v1.json \
+            plugins-v1.sig \
+            --clobber

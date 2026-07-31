@@ -172,6 +172,30 @@ publisher は既発行の JSON/signature を download・検証し、
 より大きい revision と新しい expiry へ復旧できる。publish job は
 `plugin-registry-publish` concurrency group で直列化する。
 
+core release と独立した `Plugin Registry Refresh` workflow は毎週月曜
+03:17 UTC と手動 dispatch で実行する。安定版 `plugin-registry-v1` release
+から download した `plugins-v1.json` と `plugins-v1.sig` を
+`verify-published` で認証し、その公開済み JSON だけを refresh の入力にする。
+`verify-published` は recovery のため expiry だけを許容し、schema、trust key、
+signature は通常どおり検証する。現行 signer は 1 seed から 1 signature
+envelope を生成するため、認証直後に公開済み envelope が exactly one signature
+であることを要求する。複数 signature の key rotation overlap は metadata
+変換前に fail-closed とし、既存 assets を置換しない。full multi-key signing は
+[#92](https://github.com/rurusasu/article-collector/issues/92) で追跡する。
+single-key guard 後は Rust publisher utility が revision を `u64` として checked
+increment し、単一の `generated_at` から正確に 30 日後の `expires_at` を算出
+する。revision または expiry が overflow する場合は fail-closed とする。完全な
+`plugins` payload を含むその他の値が意味的に同一であることを署名前に検証する。
+
+refresh workflow も protected `plugin-registry` environment と
+`plugin-registry-publish` concurrency group を共有し、実行中の publisher を
+cancel しない。repository の `registry/plugins-v1.json` は core release 時の
+publisher だけが入力にでき、独立 refresh は参照しない。stable release または
+必須 asset が 0 件・欠損・不正な場合、revision が `u64` でないか increment
+できない場合、timestamp が overflow する場合、署名検証が失敗するか認証済み
+signature が複数ある場合は、release を作成したり repository 内容へ fallback
+したりせず fail-closed とする。
+
 PR CI は schema と development fixture signature だけを検証し、production
 private key を参照しない。production publisher は `needs: build` の既定の
 success 条件に従い、5 target の core build がすべて成功した後だけ実行する。
@@ -209,6 +233,19 @@ seed を復元しようとしない。environment の deployment branch は `mai
 初回 production smoke test では公開済み JSON/signature の署名検証が成功し、
 registry が fresh かつ単調増加した revision を持ち、`plugins` が空であることを
 確認する。#85 の release までは空の authenticated registry が正常状態である。
+
+独立 refresh の手動 recovery は Actions の `Plugin Registry Refresh` を
+default branch で dispatch し、成功後に同じ stable release から JSON と
+signature を download して次を確認する。
+
+1. `plugins-v1.json`、`plugins-v1.sig`、`registry/trusted-keys.json` を指定した
+   `cargo run --locked --example plugin_registry -- verify` で署名と freshness が
+   有効である。
+2. revision が実行前より 1 大きく、`generated_at` と `expires_at` が更新されて
+   いる。
+3. 3 metadata field を除いた JSON が実行前の公開済み JSON と意味的に同一で
+   ある。
+4. refresh 前後の signature envelope がそれぞれ exactly one signature である。
 
 ## 保守と cleanup
 

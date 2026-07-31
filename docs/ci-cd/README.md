@@ -22,6 +22,10 @@ graph TB
   build -->|all 5 successful| sourceorder{"current tag = latest<br/>published core release"}
   sourceorder -->|true| registry["Publish Plugin Registry<br/>protected plugin-registry environment"]
   sourceorder -->|false| stale["skip stale registry source"]
+  timer["Monday 03:17 UTC<br/>or manual dispatch"] --> refresh["Plugin Registry Refresh"]
+  refresh --> authenticate["download + verify-published<br/>require one signature"]
+  authenticate --> resign["revision/timestamps only<br/>sign + exact-byte verify"]
+  resign --> registry
 ```
 
 ## CI (`ci.yml`)
@@ -75,11 +79,58 @@ Release PR が merge されると workflow が `Cargo.toml` の version から `
 - PR CI は public trust set と development fixture だけを検証し、production
   signing key を参照しない
 
+## Plugin Registry Refresh (`plugin-registry-refresh.yml`)
+
+**トリガー:** 毎週月曜 03:17 UTC、または default branch からの手動実行
+
+core release が 30 日以上ない期間も official registry を fresh に保つ。
+workflow は stable `plugin-registry-v1` release の公開済み
+`plugins-v1.json` / `plugins-v1.sig` だけを download し、expiry を recovery
+目的で許容する `verify-published` で schema、trust key、signature を認証する。
+現行 signer は 1 seed から 1 signature だけを生成するため、認証直後に公開済み
+envelope が exactly one signature であることを要求する。複数 signature の
+key rotation overlap は metadata 変換前に fail-closed とし、stable assets を
+置換しない。full multi-key signing は
+[#92](https://github.com/rurusasu/article-collector/issues/92) で追跡する。
+repository の registry 内容へ fallback せず、Rust utility が revision を
+`u64` として checked increment し、単一の生成時刻から正確に 30 日後の失効時刻
+を算出する。その他の payload が意味的に同一であることを確認してから exact
+bytes を再署名する。
+
+release publisher と同じ protected `plugin-registry` environment および
+`plugin-registry-publish` concurrency group を使い、実行中の publish は
+cancel しない。stable release がない、必須 asset が 0 件または欠損・不正、
+revision が `u64` でないか increment できない、timestamp が overflow する、
+signature が不正または複数ある、payload preservation または再署名後の検証が
+失敗した場合は upload せず fail-closed とする。stable release 自体は作成しない。
+
+手動 recovery では Actions の `Plugin Registry Refresh` を `main` で dispatch
+する。実行前の assets を別途保存し、workflow 成功後は空の作業 directory へ
+公開後の assets を download して次を実行する。
+
+```bash
+mkdir manual-refresh
+gh release download plugin-registry-v1 \
+  --pattern plugins-v1.json \
+  --pattern plugins-v1.sig \
+  --dir manual-refresh
+cargo run --locked --example plugin_registry -- \
+  verify \
+  manual-refresh/plugins-v1.json \
+  manual-refresh/plugins-v1.sig \
+  registry/trusted-keys.json
+```
+
+署名と freshness、refresh 前後の exactly one signature、revision の `+1`、
+新しい timestamps、および実行前後の JSON から 3 metadata field を除いた
+payload の意味的同一性を確認する。
+
 ## ワークフローファイル
 
 | ファイル | 用途 |
 |---------|------|
 | `.github/workflows/ci.yml` | PR CI |
 | `.github/workflows/release.yml` | Release PR 作成 + GitHub Release + asset build/upload + protected registry publish |
+| `.github/workflows/plugin-registry-refresh.yml` | 週次/手動の protected registry metadata refresh と再署名 |
 | `.github/workflows/pr-checklist.yml` | PR checklist 検証 |
 | `release-plz.toml` | release-plz の git-only release 設定 |
