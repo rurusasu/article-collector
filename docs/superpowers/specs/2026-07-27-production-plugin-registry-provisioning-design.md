@@ -33,7 +33,9 @@ the dedicated `fix/84-registry-refresh` branch based on verified `main`.
 
 - Implementing or publishing the X connector.
 - Adding any production plugin entry to the registry.
-- Supporting multiple active production signing keys.
+- Supporting multiple active production signing keys. Full old/new overlap
+  signing is tracked by GitHub issue
+  [#92](https://github.com/rurusasu/article-collector/issues/92).
 - Changing registry schema v1, plugin protocol v1, or the registry endpoint.
 - Introducing KMS, Vault, third-party registries, or user-configurable trust
   roots.
@@ -103,13 +105,17 @@ already-published content usable during periods without core releases:
 5. Authenticate the exact downloaded bytes with the committed trust set.
    Expiry is ignored only for this authenticated recovery operation; schema,
    signing key, and signature checks remain mandatory.
-6. Preserve the complete published registry payload and change only
+6. Require the authenticated signature envelope to contain exactly one
+   signature. A multi-signature envelope indicates a key-rotation overlap;
+   until #92 is implemented, the refresh fails closed instead of replacing it
+   with a single-signature envelope.
+7. Preserve the complete published registry payload and change only
    `revision`, `generated_at`, and `expires_at`.
-7. Use the Rust registry utility to increment the authenticated `u64`
+8. Use the Rust registry utility to increment the authenticated `u64`
    revision with `checked_add(1)`, failing closed at `u64::MAX`.
-8. Capture one current UTC instant, set it as `generated_at`, and derive
+9. Capture one current UTC instant, set it as `generated_at`, and derive
    `expires_at` as exactly 30 days after that same instant.
-9. Sign the refreshed exact bytes using the protected environment secret,
+10. Sign the refreshed exact bytes using the protected environment secret,
    verify them again, and replace both stable release assets.
 
 The weekly cadence leaves at least a 23-day buffer before the 30-day expiry.
@@ -143,6 +149,8 @@ published authenticated content in, refreshed metadata out.
 - The independent refresh fails closed when the stable registry assets are
   missing, malformed, signed by an untrusted key, or fail signature
   verification.
+- An authenticated multi-signature envelope is preserved unchanged by failing
+  before metadata transformation; #92 owns multi-key re-signing support.
 - A refresh never falls back to repository registry content and never uploads
   before payload-preservation, signing, and exact-byte verification succeed.
 - A failed publication leaves issue #84 open and retains its branches and

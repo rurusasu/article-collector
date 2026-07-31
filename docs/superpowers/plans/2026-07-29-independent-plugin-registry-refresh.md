@@ -17,6 +17,7 @@
 - Share `plugin-registry-publish` concurrency with the release publisher and set `cancel-in-progress: false`.
 - Authenticate the downloaded exact bytes before trusting the published revision or content.
 - Expiry may be ignored only by `verify-published`; schema, trust-key, and signature verification remain mandatory.
+- After authentication, require exactly one published signature. Fail closed before transformation when multiple signatures indicate a rotation overlap; GitHub issue #92 owns multi-key re-signing.
 - Preserve every published registry field except `revision`, `generated_at`, and `expires_at`.
 - Set revision with Rust `u64::checked_add(1)` so `u64::MAX` fails closed, and derive generation plus expiry from one UTC instant so expiry is exactly 30 days later.
 - Never read `registry/plugins-v1.json` as the independent refresh publication input.
@@ -32,14 +33,16 @@
 
 **Files:**
 - Create: `.github/workflows/plugin-registry-refresh.yml`
+- Create: `scripts/require-single-registry-signature.jq`
 - Modify: `examples/plugin_registry.rs`
 - Modify: `scripts/verify-workflow-security.sh`
+- Modify: `README.md`
 - Modify: `docs/architectures/plugins.md`
 - Modify: `docs/ci-cd/README.md`
 
 **Interfaces:**
 - Consumes: stable release assets `plugin-registry-v1/plugins-v1.json` and `plugin-registry-v1/plugins-v1.sig`; `registry/trusted-keys.json`; protected secret `PLUGIN_REGISTRY_SIGNING_KEY`.
-- Produces: refreshed `plugins-v1.json` and `plugins-v1.sig` on the same stable release; workflow name `Plugin Registry Refresh`; Rust subcommand `refresh-metadata <published-index> <refreshed-output> <generated-at>`.
+- Produces: refreshed `plugins-v1.json` and `plugins-v1.sig` on the same stable release; workflow name `Plugin Registry Refresh`; Rust subcommand `refresh-metadata <published-index> <refreshed-output> <generated-at>`; jq guard `scripts/require-single-registry-signature.jq`.
 
 - [ ] **Step 1: Add failing executable workflow-security tests**
 
@@ -47,6 +50,7 @@ Extend `scripts/verify-workflow-security.sh` before creating the production work
 
 ```bash
 refresh=".github/workflows/plugin-registry-refresh.yml"
+single_signature_filter="scripts/require-single-registry-signature.jq"
 ```
 
 Add guards that fail when the workflow is absent and require:
@@ -59,10 +63,25 @@ require_contains "$refresh" "environment: plugin-registry" "registry refresh use
 require_contains "$refresh" "group: plugin-registry-publish" "registry refresh shares publisher serialization"
 require_contains "$refresh" "cancel-in-progress: false" "registry refresh never cancels an active publisher"
 require_contains "$refresh" "verify-published" "registry refresh authenticates published bytes before reuse"
+require_contains "$refresh" "-f $single_signature_filter" "registry refresh rejects multi-signature overlap before transformation"
 require_contains "$refresh" "refresh-metadata" "registry refresh uses the checked Rust metadata transformer"
 require_contains "$refresh" "gh release upload \"\$registry_tag\"" "registry refresh replaces stable release assets"
 require_not_contains "$refresh" "registry/plugins-v1.json" "registry refresh never publishes repository registry content"
 require_occurrences "$refresh" "PLUGIN_REGISTRY_SIGNING_KEY" 1 "registry refresh exposes the signing key to one step only"
+```
+
+Execute the production signature-count filter with fixtures:
+
+```bash
+require_selector_output \
+  "$single_signature_filter" \
+  '{"schema_version":1,"signatures":[{"key_id":"only","signature":"AA=="}]}' \
+  "only" \
+  "registry refresh accepts one authenticated signing key"
+require_selector_failure \
+  "$single_signature_filter" \
+  '{"schema_version":1,"signatures":[{"key_id":"old","signature":"AA=="},{"key_id":"new","signature":"AA=="}]}' \
+  "registry refresh fails closed during multi-key overlap"
 ```
 
 Before changing production Rust code, add two unit tests to
@@ -188,6 +207,9 @@ cargo run --locked --example plugin_registry -- \
   published-registry/plugins-v1.json \
   published-registry/plugins-v1.sig \
   registry/trusted-keys.json
+jq -er \
+  -f scripts/require-single-registry-signature.jq \
+  published-registry/plugins-v1.sig >/dev/null
 ```
 
 2. **Refresh metadata and prove payload preservation** without the signing secret:
@@ -259,9 +281,14 @@ Update `docs/architectures/plugins.md` and `docs/ci-cd/README.md` with:
 - only revision/timestamps change;
 - repository registry content remains release-only;
 - zero/missing/invalid assets and signature failures fail closed;
+- authenticated multi-signature overlap fails closed without replacing assets,
+  and full multi-key signing is tracked by issue #92;
 - manual dispatch verification procedure.
 
 Add the workflow to the CI/CD workflow file table and diagram.
+Update the root `README.md` optional-plugin section with the weekly/manual
+refresh lifecycle, published-only input, single-signature fail-closed boundary,
+and a link to GitHub issue #92 for future multi-key overlap support.
 
 - [ ] **Step 7: Run Task 1 validation and commit**
 
@@ -293,7 +320,9 @@ Commit:
 git add \
   .github/workflows/plugin-registry-refresh.yml \
   examples/plugin_registry.rs \
+  scripts/require-single-registry-signature.jq \
   scripts/verify-workflow-security.sh \
+  README.md \
   docs/architectures/plugins.md \
   docs/ci-cd/README.md
 git commit -m "fix: keep plugin registry fresh between releases"
