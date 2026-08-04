@@ -80,7 +80,9 @@ jobs:
           rustup default stable
 
       - name: Validate registry schema and signature fixtures
-        run: bash scripts/verify-plugin-registry.sh
+        run: |
+          bash tests/generate-x-plugin-registry.sh
+          bash scripts/verify-plugin-registry.sh
 
   toml-check:
     name: TOML Check
@@ -112,4 +114,4 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Run shellcheck
-        run: shellcheck -x install.sh tests/install.sh scripts/*.sh
+        run: shellcheck -x install.sh tests/install.sh tests/generate-x-plugin-registry.sh scripts/*.sh

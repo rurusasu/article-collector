@@ -210,11 +210,11 @@ git commit -m "feat: expose X connector over plugin MCP stdio"
 
 **Interfaces:** `registry/x-plugin-manifest.json` は `x` plugin、protocol compatibility、`recommend-source`、configuration、`X_OAUTH_CLIENT_ID`、source schema を宣言する。`scripts/generate-x-plugin-registry.sh <source-index> <output-index> <release-tag> <asset-dir>` は exactly five non-empty connector assets を検証し、byte length/SHA-256 と HTTPS release URL を生成する。
 
-- [ ] **Step 1: Write generator tests**
+- [x] **Step 1: Write generator tests**
 
 5 target fixture artifacts、missing target、empty artifact、duplicate source owner、input payload preservation を検証する `tests/generate-x-plugin-registry.sh` を先に追加する。
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```sh
 bash tests/generate-x-plugin-registry.sh
@@ -222,11 +222,11 @@ bash tests/generate-x-plugin-registry.sh
 
 Expected: generator/manifest がないため失敗する。
 
-- [ ] **Step 3: Implement workflow**
+- [x] **Step 3: Implement workflow**
 
 release matrix の各 runner で core と `article-collector-x` を build/package/upload する。`plugin-registry-publish` は build 成功後に connector assets を download し、generator→registry validate→protected signing key で exact-byte sign→verify→registry asset upload の順で実行する。checked-in registry は実 asset checksum が出るまで空の development fixture とする。
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 ```sh
 bash tests/generate-x-plugin-registry.sh
@@ -236,7 +236,7 @@ bash scripts/verify-workflow-security.sh
 
 Expected: schema/fixture/workflow checks pass and private key is absent from tracked files.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add registry scripts .github/workflows/release.yml

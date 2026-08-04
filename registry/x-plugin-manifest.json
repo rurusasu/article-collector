@@ -1,0 +1,46 @@
+{
+  "name": "x",
+  "version": "0.6.20",
+  "protocol": "^1.0",
+  "capabilities": ["recommend-source"],
+  "sources": [
+    {
+      "name": "twitter",
+      "aliases": ["x", "x-twitter"],
+      "options_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mode"],
+        "properties": {
+          "mode": {"type": "string", "enum": ["search", "timeline", "bookmarks"]},
+          "query": {"type": "string"}
+        },
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode", "query"],
+            "properties": {
+              "mode": {"const": "search"},
+              "query": {"type": "string", "minLength": 1}
+            }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode"],
+            "properties": {"mode": {"const": "timeline"}}
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["mode"],
+            "properties": {"mode": {"const": "bookmarks"}}
+          }
+        ]
+      }
+    }
+  ],
+  "supports_configuration": true,
+  "environment": ["X_OAUTH_CLIENT_ID"]
+}

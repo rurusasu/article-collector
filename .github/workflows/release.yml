@@ -164,18 +164,23 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: article-collector-linux-amd64
+            plugin_artifact: article-collector-x-linux-amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: article-collector-linux-arm64
+            plugin_artifact: article-collector-x-linux-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             artifact: article-collector-windows-amd64.exe
+            plugin_artifact: article-collector-x-windows-amd64.exe
           - target: x86_64-apple-darwin
             os: macos-15-intel
             artifact: article-collector-macos-amd64
+            plugin_artifact: article-collector-x-macos-amd64
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: article-collector-macos-arm64
+            plugin_artifact: article-collector-x-macos-arm64
     steps:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
         with:
@@ -218,11 +223,15 @@ jobs:
         run: |
           cp target/${{ matrix.target }}/release/article-collector ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/article-collector-x ${{ matrix.plugin_artifact }}
+          chmod +x ${{ matrix.plugin_artifact }}
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: cp target/${{ matrix.target }}/release/article-collector.exe ${{ matrix.artifact }}
+        run: |
+          cp target/${{ matrix.target }}/release/article-collector.exe ${{ matrix.artifact }}
+          cp target/${{ matrix.target }}/release/article-collector-x.exe ${{ matrix.plugin_artifact }}
 
       - name: Create release asset upload token
         id: release-token
@@ -235,13 +244,13 @@ jobs:
           permission-contents: write
 
       - name: Upload release asset
-        run: gh release upload ${{ needs.release.outputs.tag_name }} ${{ matrix.artifact }} --clobber
+        run: gh release upload ${{ needs.release.outputs.tag_name }} ${{ matrix.artifact }} ${{ matrix.plugin_artifact }} --clobber
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
 
   plugin-registry-publish:
     name: Publish Plugin Registry
-    needs: build
+    needs: [release, build]
     concurrency:
       group: plugin-registry-publish
       cancel-in-progress: false
@@ -303,17 +312,31 @@ jobs:
             echo "Skipping stale registry source $current_tag; latest is $latest_core_tag."
           fi
 
-      - name: Refresh and sign exact registry bytes
+      - name: Download X plugin release artifacts
         if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
         shell: bash
         env:
           GH_TOKEN: ${{ steps.registry-token.outputs.token }}
-          PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          mkdir x-plugin-assets
+          gh release download "$RELEASE_TAG" \
+            --pattern article-collector-x-linux-amd64 \
+            --pattern article-collector-x-linux-arm64 \
+            --pattern article-collector-x-windows-amd64.exe \
+            --pattern article-collector-x-macos-amd64 \
+            --pattern article-collector-x-macos-arm64 \
+            --dir x-plugin-assets
+
+      - name: Download and authenticate current registry
+        if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.registry-token.outputs.token }}
         run: |
           set -euo pipefail
           registry_tag="plugin-registry-v1"
-          source_revision="$(jq -er '.revision' registry/plugins-v1.json)"
-          current_revision=0
           if gh release view "$registry_tag" >/dev/null 2>&1; then
             mkdir current-registry
             gh release download "$registry_tag" \
@@ -325,6 +348,18 @@ jobs:
               current-registry/plugins-v1.json \
               current-registry/plugins-v1.sig \
               registry/trusted-keys.json
+          fi
+
+      - name: Generate X plugin registry entry
+        if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          source_revision="$(jq -er '.revision' registry/plugins-v1.json)"
+          current_revision=0
+          if [ -f current-registry/plugins-v1.json ]; then
             current_revision="$(jq -er '.revision' current-registry/plugins-v1.json)"
           fi
           if [ "$current_revision" -gt "$source_revision" ]; then
@@ -332,6 +367,11 @@ jobs:
           else
             next_revision=$((source_revision + 1))
           fi
+          bash scripts/generate-x-plugin-registry.sh \
+            registry/plugins-v1.json \
+            plugins-v1-generated.json \
+            "$RELEASE_TAG" \
+            x-plugin-assets
           generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           expires_at="$(date -u -d '+30 days' +%Y-%m-%dT%H:%M:%SZ)"
           jq \
@@ -339,9 +379,17 @@ jobs:
             --arg generated_at "$generated_at" \
             --arg expires_at "$expires_at" \
             '.revision = $revision | .generated_at = $generated_at | .expires_at = $expires_at' \
-            registry/plugins-v1.json > plugins-v1.json
+            plugins-v1-generated.json > plugins-v1.json
           cargo run --locked --example plugin_registry -- \
             validate plugins-v1.json registry/trusted-keys.json
+
+      - name: Sign and verify exact registry bytes
+        if: ${{ steps.registry-source-order.outputs.publish == 'true' }}
+        shell: bash
+        env:
+          PLUGIN_REGISTRY_SIGNING_KEY: ${{ secrets.PLUGIN_REGISTRY_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
           cargo run --locked --example plugin_registry -- \
             sign plugins-v1.json plugins-v1.sig
           cargo run --locked --example plugin_registry -- \

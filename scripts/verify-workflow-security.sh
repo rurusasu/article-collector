@@ -221,7 +221,7 @@ require_contains "$release" "environment: plugin-registry" "registry signing is 
 require_not_contains "$ci" "PLUGIN_REGISTRY_SIGNING_KEY" "PR CI cannot access the registry signing key"
 require_contains "$release" "plugin-registry-v1" "registry assets use the stable release tag"
 require_not_contains "$release" "if: \${{ false }}" "registry publishing is enabled after production key provisioning"
-require_contains "$release" "needs: build" "registry publishing waits for the complete release build matrix"
+require_contains "$release" "needs: [release, build]" "registry publishing waits for the complete release build matrix"
 require_contains "$release" "id: registry-source-order" "registry publisher checks the current checkout against the latest core release"
 require_contains "$release" "jq -er -f $core_release_selector" "registry publisher runs the fail-closed core release selector"
 require_not_contains "$release" "max_by(.publishedAt)" "registry source ordering does not resolve publication-time ties by input order"
@@ -230,7 +230,8 @@ require_contains "$core_release_selector" 'test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")' 
 # The jq variable is intentionally matched literally.
 # shellcheck disable=SC2016
 require_contains "$core_release_selector" '($latest | length) != 1' "registry source ordering fails closed unless the latest publication time is unique"
-require_occurrences "$release" "if: \${{ steps.registry-source-order.outputs.publish == 'true' }}" 2 "registry refresh and upload both require the latest core source"
+require_occurrences "$release" "if: \${{ steps.registry-source-order.outputs.publish == 'true' }}" 5 "registry artifact download, refresh, signing, and upload require the latest core source"
+require_contains "$release" "bash scripts/generate-x-plugin-registry.sh" "registry publisher generates the X plugin artifact entry"
 require_contains "$release" "gh release download \"\$registry_tag\"" "registry publisher downloads the currently published registry"
 require_contains "$release" "current_revision" "registry publisher derives the next monotonic revision from published state"
 require_contains "$release" "verify-published" "registry publisher can authenticate an expired registry for recovery"

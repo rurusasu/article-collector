@@ -115,7 +115,7 @@ tasks:
       - task: fmt
       - task: clippy
       - task: toml-check
-      - shellcheck install.sh tests/install.sh scripts/*.sh
+      - shellcheck install.sh tests/install.sh tests/generate-x-plugin-registry.sh scripts/*.sh
       - task: workflow-security
 
   workflow-security:
@@ -126,6 +126,7 @@ tasks:
   plugin-registry:
     desc: "plugin registry schema と署名 fixture を検証"
     cmds:
+      - bash tests/generate-x-plugin-registry.sh
       - bash scripts/verify-plugin-registry.sh
 
   check:
