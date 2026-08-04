@@ -87,11 +87,11 @@ Run: `bash tests/install.sh`
 
 Expected: 対応 platform、未対応 platform、ダウンロード失敗時の非破壊テストがすべて PASS。
 
-- [ ] **Step 4: installer を shellcheck で検証する**
+- [x] **Step 4: installer を shellcheck で検証する**
 
 Run: `shellcheck install.sh tests/install.sh`
 
-Expected: 警告・エラーなし。現在の開発環境では `shellcheck` 未導入のため未実行。
+Expected: 警告・エラーなし。
 
 ### Task 3: README の導入手順を更新する
 

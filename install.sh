@@ -65,6 +65,6 @@ case ":${PATH:-}:" in
   *:"$install_dir":*)
     ;;
   *)
-    printf 'Add it to PATH if needed: export PATH="%s:$PATH"\n' "$install_dir"
+    printf "Add it to PATH if needed: export PATH=\"%s:\$PATH\"\n" "$install_dir"
     ;;
 esac
