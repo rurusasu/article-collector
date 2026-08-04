@@ -115,7 +115,7 @@ tasks:
       - task: fmt
       - task: clippy
       - task: toml-check
-      - shellcheck scripts/*.sh
+      - shellcheck install.sh tests/install.sh scripts/*.sh
       - task: workflow-security
 
   workflow-security:
