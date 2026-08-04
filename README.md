@@ -6,10 +6,36 @@ ACP agent 経由で翻訳できる。
 
 ## セットアップ
 
-### 推奨: GitHub Releases から取得
+### 推奨: インストーラーを1コマンドで実行（macOS / Linux）
 
-Release workflow により作成された latest release のビルド済みバイナリを利用する。
-Rust toolchain は不要。
+OS と CPU に合う latest release のビルド済みバイナリを自動選択するため、Rust toolchain は不要。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rurusasu/article-collector/main/install.sh | sh
+```
+
+`~/.local/bin/article-collector` にインストールされる。`article-collector` が見つからない場合は PATH に追加する:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Windows PowerShell
+
+Windows では対応する release asset をダウンロードする:
+
+```powershell
+$asset = "article-collector-windows-amd64.exe"
+$binDir = "$env:USERPROFILE\bin"
+New-Item -ItemType Directory -Force $binDir | Out-Null
+Invoke-WebRequest `
+  -Uri "https://github.com/rurusasu/article-collector/releases/latest/download/$asset" `
+  -OutFile "$binDir\article-collector.exe"
+```
+
+### 代替: GitHub Releases の手動取得
+
+installer を使わず、対応する asset を手動で取得する場合:
 
 | Platform | Asset |
 |----------|-------|
@@ -18,25 +44,6 @@ Rust toolchain は不要。
 | Windows amd64 | `article-collector-windows-amd64.exe` |
 | macOS amd64 (Intel) | `article-collector-macos-amd64` |
 | macOS arm64 (Apple Silicon) | `article-collector-macos-arm64` |
-
-```bash
-# Linux / macOS
-ASSET=article-collector-linux-amd64
-curl -L -o article-collector "https://github.com/rurusasu/article-collector/releases/latest/download/${ASSET}"
-chmod +x article-collector
-mkdir -p "$HOME/.local/bin"
-mv article-collector "$HOME/.local/bin/article-collector"
-```
-
-```powershell
-# Windows PowerShell
-$asset = "article-collector-windows-amd64.exe"
-$binDir = "$env:USERPROFILE\bin"
-New-Item -ItemType Directory -Force $binDir | Out-Null
-Invoke-WebRequest `
-  -Uri "https://github.com/rurusasu/article-collector/releases/latest/download/$asset" `
-  -OutFile "$binDir\article-collector.exe"
-```
 
 ### 代替: cargo install
 
