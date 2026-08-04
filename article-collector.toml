@@ -3,7 +3,6 @@ sources = [
   "hackernews",
   "devto",
   "zenn",
-  "twitter",
   "qiita",
   "bluesky",
   "arxiv",
@@ -28,9 +27,12 @@ create_pr = false
 limit = 10
 query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
 
-[recommend.source.twitter]
-limit = 10
-query = "(AI OR Rust OR security) lang:en -is:retweet"
+# X plugin source（plugin install x 後に有効化）
+# [recommend.source.twitter]
+# limit = 10
+# [recommend.source.twitter.options]
+# mode = "search"
+# query = "(AI OR Rust OR security) lang:en -is:retweet"
 
 [recommend.source.qiita]
 limit = 10

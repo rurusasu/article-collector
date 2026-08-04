@@ -111,14 +111,17 @@ core binary のインストール後、official signed registry から recommend
 source plugin を追加できる。
 
 ```bash
-article-collector plugin install example
-article-collector plugin install example@1.2.3
+article-collector plugin install x
 article-collector plugin list
-article-collector plugin update example
-article-collector plugin configure example
-article-collector plugin doctor example
-article-collector plugin uninstall example
+export X_OAUTH_CLIENT_ID="your-public-x-client-id"
+article-collector plugin configure x
+article-collector plugin doctor x
+article-collector recommend twitter --config article-collector.toml --limit 10
 ```
+
+`x` plugin は release artifact と signed registry の publish 後に install できる。
+設定済み token は plugin 専用の user-data 配下へ保存し、core の response/log には
+返さない。`plugin update x`、`plugin uninstall x` も同じ CLI で実行できる。
 
 plugin は MCP stdio server として別 process で動作する。署名と checksum は
 配布物の publisher/integrity を検証するが、完全な OS sandbox ではないため、
@@ -128,10 +131,11 @@ plugin は実行ユーザーと同じ filesystem/network 権限を持つ。insta
 権限の別 process による data root 改変まで隔離するものではない。
 
 production trust root は provision 済みで、署名を検証できる official registry
-を利用できる。現在の registry は `plugins` が空で install 可能な plugin は
-まだない。最初の production plugin となる X connector は
+を利用できる。checked-in registry は development fixture として空を保ち、X の
+5 target artifact checksum は release workflow が生成して signed registry に
+publish する。最初の production install は
 [GitHub #85](https://github.com/rurusasu/article-collector/issues/85) の release
-後に追加される。
+後に `article-collector plugin install x` で行う。
 
 official registry は core release と独立して毎週月曜 03:17 UTC に refresh
 され、手動 recovery もできる。refresh は公開済みで署名検証済みの registry
@@ -175,7 +179,19 @@ article-collector recommend all --limit 30
 article-collector recommend all --config article-collector.toml
 ```
 
-`twitter` / `x` source は X API v2 recent search を使う。実行時は `X_BEARER_TOKEN` または `TWITTER_BEARER_TOKEN` が必要で、検索条件は `[recommend.source.twitter].query` で指定する。これは X の For You timeline そのものではなく、query-based recommendation discovery として扱う。
+`twitter` / `x` / `x-twitter` recommendation source は optional な signed `x`
+plugin が所有する。初回に `X_OAUTH_CLIENT_ID` を設定して
+`article-collector plugin install x` → `article-collector plugin configure x` を
+実行する。OAuth 2.0 PKCE の read-only scopes は
+`tweet.read users.read bookmark.read offline.access` のみで、write scope は要求
+しない。plugin は `search`、`timeline`、`bookmarks` の3 modeを提供する。
+
+`search` は非空の `query` を必須とし、`timeline` / `bookmarks` は query を受け付けない。
+いずれも `limit` までページングし、同じ post ID は重複排除する。X API の利用料・rate
+limit・bookmark permission は X Developer Platform の契約に従う。checked-in の
+`article-collector.toml` は `[recommend].sources` に `twitter` を含めないため、X を
+除外したまま実行できる。plugin 未 install の状態で X を明示指定した場合は install を
+案内する。
 
 `qiita` source は Qiita API v2 items search を使う。`bluesky` / `bsky` source は public AppView の `app.bsky.feed.searchPosts` を使う。どちらも認証なしで利用でき、検索条件は `[recommend.source.qiita].query` / `[recommend.source.bluesky].query` で指定する。
 
@@ -319,7 +335,7 @@ export ACP_AGENT="gemini"
 | `article-collector recommend cisa-kev --limit 10` | CISA KEV catalog から悪用確認済み CVE を収集 | CVE ごとの NVD URL を使った推薦一覧を作成 |
 | `article-collector recommend github-search --query "<QUERY>" --limit 5` | GitHub Search API から OSS repository 候補を収集 | `raw.json` に repository 推薦一覧を作成 |
 | `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集し、翻訳まで実行 | `raw.json` に推薦一覧を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
-| `article-collector recommend all --config article-collector.toml` | source 別 config を使って推薦記事を収集 | `raw.json` に推薦一覧を作成。`[recommend].sources` が非空なら対象 source をその list に限定し、arXiv query / source 別 limit / 記事本文取得 / PR 作成を config で上書き |
+| `article-collector recommend all --config article-collector.toml` | source 別 config を使って推薦記事を収集 | `raw.json` に推薦一覧を作成。`[recommend].sources` が非空なら対象 source をその list に限定し、source 別 options / limit / 記事本文取得 / PR 作成を config で上書き |
 | `article-collector history clear --config article-collector.toml` | SQLite recommend history を clear | 次回以降の `recommend` で既読記事も再出力可能にする |
 | `article-collector history clear all --config article-collector.toml` | SQLite recommend history と env 指定 artifact directory を clear | `history clear` に加えて、`ARTICLE_COLLECTOR_TEMP_DIR` / `ARTICLE_COLLECTOR_OUTPUT_DIR` と配下ファイルを削除する |
 | `article-collector plugin install <NAME[@VERSION]>` | official signed registry から compatible plugin を install | artifact の byte length/SHA-256 と MCP descriptor を検証後、version を atomic activate |
@@ -336,6 +352,7 @@ export ACP_AGENT="gemini"
 | `ARTICLE_COLLECTOR_TEMP_DIR` | No | OS 依存 | `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中に使う temporary directory |
 | `ARTICLE_COLLECTOR_OUTPUT_DIR` | No | - | target repo 内の `*-news` directory 配下にある `.md` files をコピーする最終成果物 directory |
 | `ACP_AGENT` | Yes | - | 内蔵 mapping から選ぶ ACP agent。`codex` / `gemini` / `claude` |
+| `X_OAUTH_CLIENT_ID` | X plugin使用時 | - | X Developer Platform の public OAuth 2.0 PKCE client ID。client secret は使わない |
 | `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
 | `TARGET_REPO` | Yes | - | 保存先 GitHub リポジトリ (`owner/repo`) |
 | `TARGET_DIR` | No | OS 依存 | 保存先 repo のローカル clone 先 |
@@ -349,6 +366,10 @@ export ACP_AGENT="gemini"
 ### TOML config
 
 `article-collector.toml` は current directory から自動検出する。明示的に別ファイルを使う場合は `--config <PATH>` を指定する。
+
+X plugin の callback URL は `http://127.0.0.1:53681/callback` で、X Developer
+Platform 側にも同じ URL を登録する。`plugin configure x` が表示する authorization
+URL を開いて同意すると、read-only token が local-data の plugin storage に保存される。
 
 plugin source 固有設定は、signed manifest が宣言する JSON Schema に従って
 `options` 配下へ書く。plugin source では `query`、built-in source では
@@ -368,7 +389,6 @@ sources = [
   "hackernews",
   "devto",
   "zenn",
-  "twitter",
   "qiita",
   "bluesky",
   "arxiv",
@@ -393,9 +413,12 @@ create_pr = false
 limit = 10
 query = "cat:cs.AI OR cat:cs.CL OR cat:cs.CV OR cat:cs.LG OR cat:cs.IR OR cat:cs.SE OR cat:stat.ML"
 
-[recommend.source.twitter]
-limit = 10
-query = "(AI OR Rust OR security) lang:en -is:retweet"
+# X plugin source（plugin install x 後に有効化）
+# [recommend.source.twitter]
+# limit = 10
+# [recommend.source.twitter.options]
+# mode = "search"
+# query = "(AI OR Rust OR security) lang:en -is:retweet"
 
 [recommend.source.qiita]
 limit = 10
@@ -419,7 +442,7 @@ limit = 5
 query = "stars:>1000 pushed:>2026-01-01 archived:false"
 ```
 
-優先順位は CLI 明示指定、source 別 config、recommend 全体 config、コード内 default の順。`[recommend].sources` は `recommend all` の対象 source と実行順を固定するための list で、未指定または空の場合だけ registry 上の全 recommend source を使う。source 別の `enabled = false` はその source を skip する。`recommend all --query ...` は引き続き拒否する。`query` は `twitter`, `qiita`, `bluesky`, `arxiv`, `nvd`, `github-search` など query 対応 source の単体実行または `[recommend.source.<site>]` で指定する。`github-advisory`, `cisa-kev`, RSS/Atom feed 系 source は query 非対応。記事本文取得と PR 作成は CLI flag ではなく `[recommend].fetch_articles` / `[recommend].create_pr` で指定する。
+優先順位は CLI 明示指定、source 別 config、recommend 全体 config、コード内 default の順。`[recommend].sources` は `recommend all` の対象 source と実行順を固定するための list で、未指定または空の場合は registry 上の built-in source に加えて install 済み plugin source も使う。X を除外したい場合は、`article-collector.toml` のように built-in source だけを非空の list に列挙する。source 別の `enabled = false` はその source を skip する。`recommend all --query ...` は引き続き拒否する。X plugin の mode/query は `[recommend.source.twitter.options]`、その他の query 対応 source は `query` で指定する。`github-advisory`, `cisa-kev`, RSS/Atom feed 系 source は query 非対応。記事本文取得と PR 作成は CLI flag ではなく `[recommend].fetch_articles` / `[recommend].create_pr` で指定する。
 
 ### ACP agent 利用時の注意
 
@@ -449,7 +472,7 @@ agent から `session/request_permission` が来た場合は `cancelled` で応�
 | 対象 URL | 取得方法 | 保存 `${TYPE}` | Auth / 制約 |
 |----------|----------|----------------|-------------|
 | Dev.to | Dev.to public API | `web` | None |
-| X/Twitter status (`x.com` / `twitter.com`) | Syndication API | `x` | Public tweets only; recommend source uses X API v2 recent search with `X_BEARER_TOKEN` or `TWITTER_BEARER_TOKEN` |
+| X/Twitter status (`x.com` / `twitter.com`) | Syndication API | `x` | Direct status fetch remains built-in; recommendation source is optional `x` plugin with OAuth 2.0 PKCE/read-only scopes |
 | Qiita | generic web fetch | `web` | Recommend source uses Qiita API v2 items search |
 | Bluesky post (`bsky.app/profile/.../post/...`) | generic web fetch | `web` | Recommend source uses public AppView searchPosts |
 | YouTube (`youtube.com/watch` / `youtu.be`) | oEmbed + transcript fetch | `youtube` | None |
@@ -472,11 +495,11 @@ agent から `session/request_permission` が来た場合は `cancelled` で応�
 
 ### レコメンド収集
 
-`article-collector recommend <SITE_OR_URL>` は `raw.json` に推薦一覧を保存する。`hackernews` / `hn` では Firebase `topstories` からリンク付き story を上位30件取得する。`devto` / `dev.to` では Dev.to public API から上位記事を取得する。`zenn` では Zenn トレンド RSS を取得する。`twitter` / `x` / `x-twitter` では X API v2 recent search から query に一致する post を取得する。`qiita` / `qiita.com` では Qiita API v2 items search から query に一致する記事を取得する。`bluesky` / `bsky` / `bsky.app` では public AppView searchPosts から query に一致する post を取得する。`arxiv` では arXiv API から AI / NLP / Computer Vision / Machine Learning 系の新着論文を取得する。`github-advisory` / `github-advisories` / `ghsa` では GitHub Global Security Advisories API から公開 advisory を取得する。`cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search` も recommend source として利用できる。その他の `http://` / `https://` URL ではページ内リンクを上から抽出する。
+`article-collector recommend <SITE_OR_URL>` は `raw.json` に推薦一覧を保存する。`hackernews` / `hn` では Firebase `topstories` からリンク付き story を上位30件取得する。`devto` / `dev.to` では Dev.to public API から上位記事を取得する。`zenn` では Zenn トレンド RSS を取得する。`twitter` / `x` / `x-twitter` は install 済みの `x` plugin を通じて `search` / `timeline` / `bookmarks` を収集する。`qiita` / `qiita.com` では Qiita API v2 items search から query に一致する記事を取得する。`bluesky` / `bsky` / `bsky.app` では public AppView searchPosts から query に一致する post を取得する。`arxiv` では arXiv API から AI / NLP / Computer Vision / Machine Learning 系の新着論文を取得する。`github-advisory` / `github-advisories` / `ghsa` では GitHub Global Security Advisories API から公開 advisory を取得する。`cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search` も recommend source として利用できる。その他の `http://` / `https://` URL ではページ内リンクを上から抽出する。
 
-`article-collector recommend arxiv --query "cat:cs.CV OR cat:cs.LG" --limit 10` や `article-collector recommend twitter --query "Rust lang:en -is:retweet" --limit 10`、`article-collector recommend qiita --query "Rust tag:rust" --limit 10`、`article-collector recommend bluesky --query "atproto rust" --limit 10`、`article-collector recommend github-search --query "stars:>1000 pushed:>2026-01-01 archived:false" --limit 5` のように `--query` を指定すると、query 対応 source の検索条件を上書きできる。`--query` は `twitter`, `qiita`, `bluesky`, `arxiv`, `nvd`, `github-search` など query 対応 source 専用で、`all` や URL fallback では使用しない。
+`article-collector recommend arxiv --query "cat:cs.CV OR cat:cs.LG" --limit 10`、`article-collector recommend qiita --query "Rust tag:rust" --limit 10`、`article-collector recommend bluesky --query "atproto rust" --limit 10`、`article-collector recommend github-search --query "stars:>1000 pushed:>2026-01-01 archived:false" --limit 5` のように `--query` を指定すると、built-in query source の検索条件を上書きできる。X plugin は `[recommend.source.twitter.options]` で mode と query を指定する。`--query` は plugin source へ渡さず、`all` や URL fallback では使用しない。
 
-`article-collector recommend all --limit 30` は registry で recommend source が設定された全 site から、それぞれ最大30件ずつ取得して 1 つの `raw.json` にまとめる。現在の対象は `hackernews`, `devto`, `zenn`, `twitter`, `qiita`, `bluesky`, `arxiv`, `github-advisory`, `cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search`。`thoughtworks-radar` は安定した machine-readable feed/API が確認できていないため、`recommend all` には含めず、URL fallback のみ対応する。`article-collector.toml` の `[recommend]` / `[recommend.source.<site>]` で source 順序、enabled、limit、query、記事本文取得を上書きできる。特に `[recommend].sources` に非空の list を書いた場合、`all` でもその list に含まれる source だけを収集する。その後、`ACP_AGENT` が設定されていれば同じ入力を翻訳して `translated.md` を作成する。`[recommend].fetch_articles = true` の `translated.md` は Slack 投稿向けの index になり、記事ごとの URL, Hacker News score/comments などの metadata, summary excerpt, 翻訳ファイル link を含む。`ACP_AGENT` が未設定または空文字の場合、翻訳は skip される。YouTube のチャンネル RSS / API-key 検索は第2弾で扱う。
+`article-collector recommend all --limit 30` は registry で recommend source が設定された built-in site と、install 済み plugin source から、それぞれ最大30件ずつ取得して 1 つの `raw.json` にまとめる。現在の built-in 対象は `hackernews`, `devto`, `zenn`, `qiita`, `bluesky`, `arxiv`, `github-advisory`, `cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search`。X を含める場合は plugin を install し、明示的に順序を固定する場合は `twitter` を `[recommend].sources` に追加する。`thoughtworks-radar` は安定した machine-readable feed/API が確認できていないため、`recommend all` には含めず、URL fallback のみ対応する。`article-collector.toml` の `[recommend]` / `[recommend.source.<site>]` で source 順序、enabled、limit、query、記事本文取得を上書きできる。特に `[recommend].sources` に非空の list を書いた場合、`all` でもその list に含まれる source だけを収集する。その後、`ACP_AGENT` が設定されていれば同じ入力を翻訳して `translated.md` を作成する。`[recommend].fetch_articles = true` の `translated.md` は Slack 投稿向けの index になり、記事ごとの URL, Hacker News score/comments などの metadata, summary excerpt, 翻訳ファイル link を含む。`ACP_AGENT` が未設定または空文字の場合、翻訳は skip される。YouTube のチャンネル RSS / API-key 検索は第2弾で扱う。
 
 `recommend` は SQLite の既読履歴で過去に `raw.json` へ出力した記事 URL を管理し、次回以降は同じ記事を `raw.json` に出力しない。`ARTICLE_COLLECTOR_TEMP_DIR` は `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中の temporary directory だけを変更し、履歴 DB の場所や最終成果物の保存先は変更しない。履歴 DB は既定ではユーザー設定ディレクトリ配下の `article-collector/recommend-history.sqlite` に作成する。別の場所を使う場合は `[recommend].history_path` を指定する。候補自体が 0 件の場合は `No recommended articles found for <target>`、全候補が既読だった場合は `No new recommended articles found for <target>` で非ゼロ終了する。
 

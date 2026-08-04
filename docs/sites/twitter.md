@@ -8,26 +8,74 @@
   - `https://x.com/<user>/status/<id>`
   - `https://twitter.com/<user>/status/<id>`
 
-## URL 構造
+## URL と direct fetch
 
 tweet URL は `x.com` または `twitter.com` 配下の `/status/<id>` を使う。
+直接 tweet URL の取得は built-in の `FetchRoute::SocialStatus` / `SaveType::X`
+で引き続き利用できる。direct fetch は X OAuth plugin の install を必要としない。
 
-## discovery endpoint の構造
+## Recommendation plugin
 
-- 種類: `DiscoveryEndpoint::SearchApi`
-- endpoint: `https://api.x.com/2/tweets/search/recent`
-- 認証: `X_BEARER_TOKEN` または `TWITTER_BEARER_TOKEN`
-- query: `[recommend.source.twitter].query`
+X の recommendation discovery は core から分離された signed `x` plugin が担当する。
+plugin を install すると、source list を指定しない `recommend all` では X も対象になる。
+X を除外したい場合は、`[recommend].sources` に built-in source だけを列挙する。明示的に
+X を使う場合は次を実行する。
 
-この discovery は X の For You timeline そのものではなく、X API v2 recent search を使った query-based recommendation source として扱う。
+```bash
+article-collector plugin install x
+export X_OAUTH_CLIENT_ID="your-public-x-client-id"
+article-collector plugin configure x
+```
 
-## article fetch の方法
+X Developer Platform には loopback callback URL
+`http://127.0.0.1:53681/callback` を登録する。OAuth 2.0 PKCE で要求する scope は
+`tweet.read users.read bookmark.read offline.access` のみで、write scope は要求しない。
+client secret は使わず、token は connector の local-data storage に保存する。
 
-- fetch route: `FetchRoute::SocialStatus`
-- save type: `SaveType::X`
+plugin の endpoint は X hosted MCP `https://api.x.com/mcp` で、`tools/list` によって
+required read tool と input schema を検証する。tool 契約が変わった場合は fail-closed
+し、direct X API fallback は行わない。
 
-fetch は URL から status ID を抽出し、social status 向け metadata または fallback item を返す。
+## Mode と設定
 
-## 補足
+source 固有 options は TOML の `options` 配下に置く。
 
-直接 tweet URL fetch と recent search discovery は同じ `twitter` site entry で扱う。browser scraping や user-authenticated home timeline collection は対象外。
+### Search
+
+`search` は非空 `query` が必須。`limit` 件まで `searchPostsRecent` をページングし、
+post ID の重複を除去する。
+
+```toml
+[recommend.source.twitter]
+limit = 10
+
+[recommend.source.twitter.options]
+mode = "search"
+query = "(AI OR Rust OR security) lang:en -is:retweet"
+```
+
+### Timeline / bookmarks
+
+`timeline` と `bookmarks` は `query` を指定しない。connector は `getUsersMe` を先に
+呼び、その user ID を使って対応する read tool をページングする。
+
+```toml
+[recommend.source.twitter]
+limit = 10
+
+[recommend.source.twitter.options]
+mode = "timeline"
+# mode = "bookmarks" も指定可能
+```
+
+X API の利用料、rate limit、bookmark permission は X Developer Platform の契約に
+従う。401 は refresh token で一度だけ再試行し、403、429、malformed response、tool
+schema 不一致は安全な診断で終了する。
+
+## Candidate normalization
+
+post の最初の非空行を title、本文を content とし、author expansion があれば
+`https://x.com/<username>/status/<id>`、なければ
+`https://x.com/i/web/status/<id>` を canonical URL にする。metadata には
+`tweet_id`、`author`、`username`、`created_at`、`public_metrics` を必要に応じて保持する。
+`source`、`site`、`rank` は core 所有のため plugin は返さない。
