@@ -1,7 +1,13 @@
+use article_collector::x_connector::oauth::{
+    pkce_challenge, CallbackResult, OAuthClient, OAuthConfig,
+};
+use article_collector::x_connector::token_store::{TokenSet, TokenStore};
 use article_collector::x_connector::{
     descriptor, normalize_response, parse_collect_options, CollectionMode,
 };
+use chrono::{Duration, Utc};
 use serde_json::{json, Map, Value};
+use url::Url;
 
 fn options(value: Value) -> Map<String, Value> {
     value
@@ -136,4 +142,117 @@ fn normalizes_response_rejects_malformed_posts() {
     ] {
         assert!(normalize_response(&response).is_err());
     }
+}
+
+#[test]
+fn token_store_round_trips_and_marks_expiry_without_exposing_secrets() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = TokenStore::from_root(temp.path().to_path_buf());
+    let tokens = TokenSet {
+        access_token: "access-secret".to_string(),
+        refresh_token: Some("refresh-secret".to_string()),
+        expires_at: Utc::now() + Duration::minutes(5),
+    };
+
+    store.save(&tokens).unwrap();
+    let loaded = store.load().unwrap().unwrap();
+
+    assert_eq!(loaded, tokens);
+    assert!(!loaded.is_expired(Utc::now()));
+    assert!(loaded.is_expired(Utc::now() + Duration::minutes(6)));
+    let missing_store = TokenStore::from_root(temp.path().join("missing"));
+    assert!(missing_store.load().unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn token_store_writes_credentials_with_restrictive_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let store = TokenStore::from_root(temp.path().to_path_buf());
+    store
+        .save(&TokenSet {
+            access_token: "access-secret".to_string(),
+            refresh_token: None,
+            expires_at: Utc::now(),
+        })
+        .unwrap();
+
+    let mode = std::fs::metadata(store.path())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(mode, 0o600);
+}
+
+#[test]
+fn pkce_authorization_request_contains_s256_state_and_read_scopes() {
+    let config = OAuthConfig::for_test(
+        "client-id",
+        "https://example.com/authorize",
+        "https://example.com/token",
+        "http://127.0.0.1:53681/callback",
+    )
+    .unwrap();
+    let client = OAuthClient::new(config).unwrap();
+    let request = client.authorization_request().unwrap();
+    let query: std::collections::HashMap<_, _> = request.url.query_pairs().into_owned().collect();
+
+    assert_eq!(query.get("response_type").map(String::as_str), Some("code"));
+    assert_eq!(
+        query.get("client_id").map(String::as_str),
+        Some("client-id")
+    );
+    assert_eq!(
+        query.get("redirect_uri").map(String::as_str),
+        Some("http://127.0.0.1:53681/callback")
+    );
+    assert_eq!(
+        query.get("scope").map(String::as_str),
+        Some("tweet.read users.read bookmark.read offline.access")
+    );
+    assert_eq!(
+        query.get("code_challenge_method").map(String::as_str),
+        Some("S256")
+    );
+    assert_eq!(
+        query.get("code_challenge").map(String::as_str),
+        Some(request.challenge.as_str())
+    );
+    assert_eq!(
+        query.get("state").map(String::as_str),
+        Some(request.state.as_str())
+    );
+    assert_eq!(pkce_challenge(&request.verifier), request.challenge);
+}
+
+#[test]
+fn oauth_callback_rejects_state_mismatch_and_denial_without_returning_code() {
+    let config = OAuthConfig::for_test(
+        "client-id",
+        "https://example.com/authorize",
+        "https://example.com/token",
+        "http://127.0.0.1:53681/callback",
+    )
+    .unwrap();
+    let client = OAuthClient::new(config).unwrap();
+
+    let mismatch = client.parse_callback(
+        &Url::parse("http://127.0.0.1:53681/callback?state=wrong&code=secret-code").unwrap(),
+        "expected",
+    );
+    assert!(matches!(
+        mismatch,
+        Err(CallbackResult::StateMismatch { .. })
+    ));
+
+    let denied = client.parse_callback(
+        &Url::parse("http://127.0.0.1:53681/callback?state=expected&error=access_denied").unwrap(),
+        "expected",
+    );
+    let error = denied.unwrap_err();
+    assert!(matches!(error, CallbackResult::Denied { .. }));
+    assert!(!error.to_string().contains("secret-code"));
 }

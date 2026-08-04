@@ -1,4 +1,6 @@
 pub mod normalize;
+pub mod oauth;
+pub mod token_store;
 pub use normalize::normalize_response;
 
 use anyhow::{bail, Result};

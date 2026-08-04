@@ -24,6 +24,7 @@ regex = "1"
 scraper = "0.22"
 quick-xml = "0.38"
 chrono = { version = "0.4", features = ["serde"] }
+rand = "0.9"
 anyhow = "1"
 async-trait = "0.1"
 command-group = { version = "5.0.1", features = ["with-tokio"] }
