@@ -91,7 +91,6 @@ pub enum JsonRequest {
 pub enum SearchRequest {
     QueryParam { name: &'static str },
     ArxivSearch,
-    XRecentSearch,
     QiitaItems,
     BlueskySearchPosts,
 }

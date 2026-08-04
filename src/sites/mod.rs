@@ -97,19 +97,13 @@ mod tests {
     }
 
     #[test]
-    fn resolves_twitter_aliases_and_recent_search_discovery() {
+    fn resolves_twitter_aliases_without_builtin_discovery() {
         let site = site_by_name("twitter").unwrap();
 
         assert_eq!(site_by_name("x").unwrap().name, site.name);
         assert_eq!(site_by_name("x-twitter").unwrap().name, site.name);
-        assert!(recommendable_site_names().contains(&"twitter"));
-        assert!(matches!(
-            site.discovery,
-            Some(DiscoveryEndpoint::SearchApi {
-                request: SearchRequest::XRecentSearch,
-                ..
-            })
-        ));
+        assert!(!recommendable_site_names().contains(&"twitter"));
+        assert!(site.discovery.is_none());
     }
 
     #[test]
@@ -234,7 +228,6 @@ mod tests {
                 "hackernews",
                 "devto",
                 "zenn",
-                "twitter",
                 "qiita",
                 "bluesky",
                 "arxiv",
@@ -256,17 +249,16 @@ mod tests {
     #[test]
     fn lists_recommendable_sites() {
         let sites = recommendable_sites();
-        assert_eq!(sites.len(), 18);
+        assert_eq!(sites.len(), 17);
         assert_eq!(sites[0].name, "hackernews");
         assert_eq!(sites[1].name, "devto");
         assert_eq!(sites[2].name, "zenn");
-        assert_eq!(sites[3].name, "twitter");
-        assert_eq!(sites[4].name, "qiita");
-        assert_eq!(sites[5].name, "bluesky");
-        assert_eq!(sites[6].name, "arxiv");
-        assert_eq!(sites[7].name, "github-advisory");
-        assert_eq!(sites[8].name, "cisa-kev");
-        assert_eq!(sites[17].name, "github-search");
+        assert_eq!(sites[3].name, "qiita");
+        assert_eq!(sites[4].name, "bluesky");
+        assert_eq!(sites[5].name, "arxiv");
+        assert_eq!(sites[6].name, "github-advisory");
+        assert_eq!(sites[7].name, "cisa-kev");
+        assert_eq!(sites[16].name, "github-search");
         assert!(sites.iter().all(|site| site.discovery.is_some()));
     }
 

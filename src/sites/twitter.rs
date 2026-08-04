@@ -1,7 +1,4 @@
-use super::types::{DiscoveryEndpoint, FetchRoute, SaveType, SearchRequest, Site, UrlRule};
-
-pub const X_RECENT_SEARCH_API: &str = "https://api.x.com/2/tweets/search/recent";
-pub const DEFAULT_X_RECENT_SEARCH_QUERY: &str = "(AI OR Rust OR security) lang:en -is:retweet";
+use super::types::{FetchRoute, SaveType, Site, UrlRule};
 
 const ARTICLE_RULES: &[UrlRule] = &[
     UrlRule::new(&["x.com/", "/status/"]),
@@ -20,11 +17,7 @@ pub const SITE: Site = Site {
     fetch_route: FetchRoute::SocialStatus,
     save_type: SaveType::X,
     save_rules: SAVE_RULES,
-    discovery: Some(DiscoveryEndpoint::SearchApi {
-        api_url: X_RECENT_SEARCH_API,
-        default_query: Some(DEFAULT_X_RECENT_SEARCH_QUERY),
-        request: SearchRequest::XRecentSearch,
-    }),
+    discovery: None,
     parse_discovery: None,
     fetch_article: None,
 };
