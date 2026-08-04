@@ -144,21 +144,21 @@ git commit -m "feat: add X OAuth PKCE token store"
 
 **Interfaces:** `XRemoteMcp::validate_tools` は required read tools と input schema を検証し、`XRemoteMcp::collect(options, limit)` は normalized candidates を返す。mode tool sequence は search=`searchPostsRecent`、timeline=`getUsersMe`→`getUsersTimeline`、bookmarks=`getUsersMe`→`getUsersBookmarks`。
 
-- [ ] **Step 1: Write fake-server tests**
+- [x] **Step 1: Write fake-server tests**
 
 local fake Streamable HTTP MCP server を作り initialize/tools/list/tools/call を記録する。3 mode、`max_results`/pagination/limit、duplicate、tool mismatch、malformed response、401 refresh、403、429 reset header を test する。
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```sh
 cargo test --locked --test x_connector remote_mcp
 ```
 
-- [ ] **Step 3: Implement the adapter**
+- [x] **Step 3: Implement the adapter**
 
 rmcp に `transport-streamable-http-client-reqwest` feature を追加する。protocol `2025-06-18` で initialize、`Bearer <token>` auth header で `tools/list` と tool calls を行い、page counter を bounded にする。401 は token refresh 後に一度だけ再試行し、direct API fallback はしない。
 
-- [ ] **Step 4: Verify green and secret redaction**
+- [x] **Step 4: Verify green and secret redaction**
 
 ```sh
 cargo test --locked --test x_connector remote_mcp
@@ -167,7 +167,7 @@ cargo test --locked --lib x_connector::remote_mcp
 
 Expected: fake-server tests pass and diagnostics never contain Authorization/token fixtures.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add Cargo.toml Cargo.lock src/x_connector tests/x_connector.rs
@@ -286,4 +286,3 @@ Expected: no old direct-token path, no credential literal, clean worktree, scope
 git add README.md docs/sites/twitter.md docs/AGENTS.md article-collector.toml tests
 git commit -m "docs: document X MCP recommendation plugin"
 ```
-

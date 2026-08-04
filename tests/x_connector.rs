@@ -1,12 +1,19 @@
+use anyhow::Context;
 use article_collector::x_connector::oauth::{
     pkce_challenge, CallbackResult, OAuthClient, OAuthConfig,
 };
+use article_collector::x_connector::remote_mcp::XRemoteMcp;
 use article_collector::x_connector::token_store::{TokenSet, TokenStore};
 use article_collector::x_connector::{
-    descriptor, normalize_response, parse_collect_options, CollectionMode,
+    descriptor, normalize_response, parse_collect_options, CollectOptions, CollectionMode,
 };
 use chrono::{Duration, Utc};
 use serde_json::{json, Map, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{oneshot, Mutex};
 use url::Url;
 
 fn options(value: Value) -> Map<String, Value> {
@@ -255,4 +262,526 @@ fn oauth_callback_rejects_state_mismatch_and_denial_without_returning_code() {
     let error = denied.unwrap_err();
     assert!(matches!(error, CallbackResult::Denied { .. }));
     assert!(!error.to_string().contains("secret-code"));
+}
+
+#[tokio::test]
+async fn remote_mcp_collects_search_results_with_pagination() -> anyhow::Result<()> {
+    let server = FakeXMcpServer::start().await?;
+    let client = XRemoteMcp::new(
+        Url::parse(&server.url())?,
+        TokenSet {
+            access_token: "test-access-token".to_string(),
+            refresh_token: None,
+            expires_at: Utc::now() + Duration::minutes(5),
+        },
+    )?;
+    let items = client
+        .collect(
+            &CollectOptions {
+                mode: CollectionMode::Search,
+                query: Some("Rust lang:en".to_string()),
+            },
+            2,
+        )
+        .await?;
+
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0].metadata["tweet_id"], "1");
+    assert_eq!(items[1].metadata["tweet_id"], "2");
+    assert_eq!(items[0].url.as_str(), "https://x.com/alice/status/1");
+
+    let calls = server.calls().await;
+    assert_eq!(
+        calls,
+        vec![
+            (
+                "searchPostsRecent".to_string(),
+                json!({
+                    "query": "Rust lang:en",
+                    "max_results": 2,
+                    "expansions": "author_id",
+                    "tweet.fields": "author_id,created_at,public_metrics",
+                    "user.fields": "name,username"
+                })
+            ),
+            (
+                "searchPostsRecent".to_string(),
+                json!({
+                    "query": "Rust lang:en",
+                    "max_results": 1,
+                    "next_token": "page-2",
+                    "expansions": "author_id",
+                    "tweet.fields": "author_id,created_at,public_metrics",
+                    "user.fields": "name,username"
+                })
+            )
+        ]
+    );
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_mcp_runs_timeline_and_bookmark_tool_sequences() -> anyhow::Result<()> {
+    for (scenario, mode, expected_tool, expected_id) in [
+        (
+            FakeScenario::Timeline,
+            CollectionMode::Timeline,
+            "getUsersTimeline",
+            "3",
+        ),
+        (
+            FakeScenario::Bookmarks,
+            CollectionMode::Bookmarks,
+            "getUsersBookmarks",
+            "4",
+        ),
+    ] {
+        let server = FakeXMcpServer::start_with(scenario).await?;
+        let client = test_remote_client(&server)?;
+        let items = client
+            .collect(&CollectOptions { mode, query: None }, 1)
+            .await?;
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].metadata["tweet_id"], expected_id);
+        let calls = server.calls().await;
+        assert_eq!(calls[0].0, "getUsersMe");
+        assert_eq!(calls[1].0, expected_tool);
+        assert_eq!(calls[1].1["id"], "42");
+        assert_eq!(calls[1].1["max_results"], 1);
+        server.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_mcp_deduplicates_across_pages_and_fails_closed() -> anyhow::Result<()> {
+    let server = FakeXMcpServer::start_with(FakeScenario::Duplicate).await?;
+    let client = test_remote_client(&server)?;
+    let items = client
+        .collect(
+            &CollectOptions {
+                mode: CollectionMode::Search,
+                query: Some("Rust".to_string()),
+            },
+            2,
+        )
+        .await?;
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.metadata["tweet_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["1", "2"]
+    );
+    server.shutdown().await;
+
+    let server = FakeXMcpServer::start_with(FakeScenario::MissingTool).await?;
+    let client = test_remote_client(&server)?;
+    let error = client.validate_tools().await.unwrap_err();
+    assert!(error.to_string().contains("getUsersBookmarks"));
+    server.shutdown().await;
+
+    let server = FakeXMcpServer::start_with(FakeScenario::Malformed).await?;
+    let client = test_remote_client(&server)?;
+    let error = client
+        .collect(
+            &CollectOptions {
+                mode: CollectionMode::Search,
+                query: Some("Rust".to_string()),
+            },
+            1,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("malformed"));
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn remote_mcp_refreshes_once_on_401_and_maps_permission_errors() -> anyhow::Result<()> {
+    let server = FakeXMcpServer::start_with(FakeScenario::UnauthorizedOnce).await?;
+    let temp = tempfile::tempdir()?;
+    let store = TokenStore::from_root(temp.path().to_path_buf());
+    let oauth = OAuthClient::new(OAuthConfig::for_test(
+        "client-id",
+        &format!("{}/authorize", server.base_url()),
+        &format!("{}/token", server.base_url()),
+        "http://127.0.0.1:53681/callback",
+    )?)?;
+    let client = XRemoteMcp::new(
+        Url::parse(&server.url())?,
+        TokenSet {
+            access_token: "expired-access".to_string(),
+            refresh_token: Some("old-refresh".to_string()),
+            expires_at: Utc::now() + Duration::minutes(5),
+        },
+    )?
+    .with_refresh(oauth, store.clone());
+    let items = client
+        .collect(
+            &CollectOptions {
+                mode: CollectionMode::Search,
+                query: Some("Rust".to_string()),
+            },
+            1,
+        )
+        .await?;
+    assert_eq!(items.len(), 1);
+    assert_eq!(store.load()?.unwrap().access_token, "refreshed-access");
+    server.shutdown().await;
+
+    for (scenario, expected) in [
+        (FakeScenario::Forbidden, "scope"),
+        (FakeScenario::RateLimited, "rate limit"),
+    ] {
+        let server = FakeXMcpServer::start_with(scenario).await?;
+        let client = test_remote_client(&server)?;
+        let error = client.validate_tools().await.unwrap_err();
+        assert!(error.to_string().contains(expected));
+        server.shutdown().await;
+    }
+    Ok(())
+}
+
+fn test_remote_client(server: &FakeXMcpServer) -> anyhow::Result<XRemoteMcp> {
+    XRemoteMcp::new(
+        Url::parse(&server.url())?,
+        TokenSet {
+            access_token: "test-access-token".to_string(),
+            refresh_token: None,
+            expires_at: Utc::now() + Duration::minutes(5),
+        },
+    )
+}
+
+struct FakeXMcpServer {
+    address: std::net::SocketAddr,
+    calls: Arc<Mutex<Vec<(String, Value)>>>,
+    shutdown: Option<oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone, Copy)]
+enum FakeScenario {
+    Search,
+    Timeline,
+    Bookmarks,
+    Duplicate,
+    MissingTool,
+    Malformed,
+    UnauthorizedOnce,
+    Forbidden,
+    RateLimited,
+}
+
+impl FakeXMcpServer {
+    async fn start() -> anyhow::Result<Self> {
+        Self::start_with(FakeScenario::Search).await
+    }
+
+    async fn start_with(scenario: FakeScenario) -> anyhow::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (shutdown, mut shutdown_rx) = oneshot::channel();
+        let calls_for_task = Arc::clone(&calls);
+        let unauthorized_seen = Arc::new(AtomicBool::new(false));
+        let unauthorized_seen_for_task = Arc::clone(&unauthorized_seen);
+        let task = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = &mut shutdown_rx => break,
+                    accepted = listener.accept() => {
+                        let Ok((stream, _)) = accepted else { break };
+                        if handle_fake_request(
+                            stream,
+                            &calls_for_task,
+                            scenario,
+                            &unauthorized_seen_for_task,
+                        ).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        Ok(Self {
+            address,
+            calls,
+            shutdown: Some(shutdown),
+            task,
+        })
+    }
+
+    fn url(&self) -> String {
+        format!("http://{}/mcp", self.address)
+    }
+
+    async fn calls(&self) -> Vec<(String, Value)> {
+        self.calls.lock().await.clone()
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://{}", self.address)
+    }
+
+    async fn shutdown(mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        let _ = self.task.await;
+    }
+}
+
+async fn handle_fake_request(
+    mut stream: TcpStream,
+    calls: &Arc<Mutex<Vec<(String, Value)>>>,
+    scenario: FakeScenario,
+    unauthorized_seen: &Arc<AtomicBool>,
+) -> anyhow::Result<()> {
+    let (method, path, body) = read_http_request(&mut stream).await?;
+    if path == "/token" {
+        write_http_response(
+            &mut stream,
+            200,
+            Some(json!({
+                "access_token": "refreshed-access",
+                "refresh_token": "refreshed-refresh",
+                "expires_in": 3600
+            })),
+        )
+        .await?;
+        return Ok(());
+    }
+    if matches!(scenario, FakeScenario::UnauthorizedOnce)
+        && !unauthorized_seen.swap(true, Ordering::SeqCst)
+    {
+        write_http_response(&mut stream, 401, None).await?;
+        return Ok(());
+    }
+    if matches!(scenario, FakeScenario::Forbidden) {
+        write_http_response(&mut stream, 403, None).await?;
+        return Ok(());
+    }
+    if matches!(scenario, FakeScenario::RateLimited) {
+        write_http_response(&mut stream, 429, None).await?;
+        return Ok(());
+    }
+    let request: Value = if body.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&body)?
+    };
+    let id = request.get("id").cloned().unwrap_or(Value::Null);
+    let rpc_method = request.get("method").and_then(Value::as_str).unwrap_or("");
+
+    if rpc_method == "notifications/initialized" {
+        write_http_response(&mut stream, 202, None).await?;
+        return Ok(());
+    }
+
+    let response = match rpc_method {
+        "initialize" => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake-x", "version": "1.0.0"}
+            }
+        }),
+        "tools/list" => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {"tools": fake_tools(scenario)}
+        }),
+        "tools/call" => {
+            let params = request.get("params").cloned().unwrap_or_default();
+            let name = params
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let arguments = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            calls.lock().await.push((name.clone(), arguments.clone()));
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"content": [{"type": "text", "text": serde_json::to_string(&fake_tool_result(scenario, &name, &arguments))?}], "isError": false}
+            })
+        }
+        _ => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": -32601, "message": format!("unknown method {rpc_method}")}
+        }),
+    };
+
+    let _ = method;
+    write_http_response(&mut stream, 200, Some(response)).await?;
+    Ok(())
+}
+
+fn fake_tools(scenario: FakeScenario) -> Value {
+    let mut tools = vec![
+        fake_tool("searchPostsRecent", &["query", "max_results"]),
+        fake_tool("getUsersMe", &["user.fields"]),
+        fake_tool("getUsersTimeline", &["id", "max_results"]),
+        fake_tool("getUsersBookmarks", &["id", "max_results"]),
+    ];
+    if matches!(scenario, FakeScenario::MissingTool) {
+        tools.pop();
+    }
+    Value::Array(tools)
+}
+
+fn fake_tool(name: &str, properties: &[&str]) -> Value {
+    let properties = properties
+        .iter()
+        .map(|property| ((*property).to_string(), json!({"type": "string"})))
+        .collect::<Map<_, _>>();
+    json!({
+        "name": name,
+        "inputSchema": {"type": "object", "properties": properties}
+    })
+}
+
+fn fake_tool_result(scenario: FakeScenario, name: &str, arguments: &Value) -> Value {
+    if matches!(scenario, FakeScenario::Malformed) && name == "searchPostsRecent" {
+        return json!({"data": "malformed"});
+    }
+    match (scenario, name) {
+        (FakeScenario::Search, "searchPostsRecent")
+        | (FakeScenario::UnauthorizedOnce, "searchPostsRecent")
+            if arguments.get("next_token").is_none() =>
+        {
+            json!({
+                "data": [{"id": "1", "text": "first result", "author_id": "42"}],
+                "includes": {"users": [{"id": "42", "username": "alice", "name": "Alice"}]},
+                "meta": {"next_token": "page-2"}
+            })
+        }
+        (FakeScenario::Search, "searchPostsRecent")
+        | (FakeScenario::UnauthorizedOnce, "searchPostsRecent") => json!({
+            "data": [{"id": "2", "text": "second result"}],
+            "meta": {}
+        }),
+        (FakeScenario::Duplicate, "searchPostsRecent") if arguments.get("next_token").is_none() => {
+            json!({
+                "data": [
+                    {"id": "1", "text": "first result"},
+                    {"id": "1", "text": "duplicate result"}
+                ],
+                "meta": {"next_token": "page-2"}
+            })
+        }
+        (FakeScenario::Duplicate, "searchPostsRecent") => json!({
+            "data": [
+                {"id": "1", "text": "duplicate result"},
+                {"id": "2", "text": "second result"}
+            ],
+            "meta": {}
+        }),
+        (FakeScenario::Timeline, "getUsersMe") | (FakeScenario::Bookmarks, "getUsersMe") => {
+            json!({"data": {"id": "42"}})
+        }
+        (FakeScenario::Timeline, "getUsersTimeline") => {
+            json!({"data": [{"id": "3", "text": "timeline result"}], "meta": {}})
+        }
+        (FakeScenario::Bookmarks, "getUsersBookmarks") => {
+            json!({"data": [{"id": "4", "text": "bookmark result"}], "meta": {}})
+        }
+        _ => json!({"data": [], "meta": {}}),
+    }
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<(String, String, Vec<u8>)> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    let header_end = loop {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            anyhow::bail!("fake MCP server received an incomplete HTTP request")
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if let Some(index) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index;
+        }
+    };
+    let header_bytes = &bytes[..header_end];
+    let header_text = std::str::from_utf8(header_bytes)?;
+    let mut lines = header_text.lines();
+    let request_line = lines
+        .next()
+        .context("fake MCP request has no request line")?;
+    let method = request_line
+        .split_whitespace()
+        .next()
+        .context("fake MCP request has no HTTP method")?
+        .to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .context("fake MCP request has no path")?
+        .to_string();
+    let content_length = lines
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            (name.eq_ignore_ascii_case("content-length")).then(|| value.trim().parse::<usize>())
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let body_start = header_end + 4;
+    while bytes.len() < body_start + content_length {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            anyhow::bail!("fake MCP server received an incomplete HTTP body")
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+    Ok((
+        method,
+        path,
+        bytes[body_start..body_start + content_length].to_vec(),
+    ))
+}
+
+async fn write_http_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: Option<Value>,
+) -> anyhow::Result<()> {
+    let body = body
+        .map(|value| serde_json::to_vec(&value))
+        .transpose()?
+        .unwrap_or_default();
+    let status_text = match status {
+        200 => "OK",
+        202 => "Accepted",
+        401 => "Unauthorized",
+        403 => "Forbidden",
+        429 => "Too Many Requests",
+        _ => "Error",
+    };
+    let auth_header = match status {
+        401 => "WWW-Authenticate: Bearer realm=\"x\"\r\n",
+        403 => "WWW-Authenticate: Bearer error=\"insufficient_scope\", scope=\"tweet.read\"\r\n",
+        429 => "X-RateLimit-Reset: 1234567890\r\n",
+        _ => "",
+    };
+    let response = format!(
+        "HTTP/1.1 {status} {status_text}\r\nContent-Type: application/json\r\n{auth_header}Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(&body).await?;
+    stream.shutdown().await?;
+    Ok(())
 }
