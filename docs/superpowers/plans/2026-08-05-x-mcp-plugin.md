@@ -178,28 +178,28 @@ git commit -m "feat: collect X modes through hosted MCP"
 
 **Interfaces:** `pub async fn run_stdio() -> anyhow::Result<()>` は core と同じ `JsonRpcMessageCodec<Value>` を使う。`article_collector_describe_sources`、`article_collector_configure`、`article_collector_collect` を実装し、collect response は `structuredContent: { items }` を含む。
 
-- [ ] **Step 1: Write protocol tests**
+- [x] **Step 1: Write protocol tests**
 
 initialize、initialized notification、tools/list、describe、invalid options、configure success/error、collect requests を handler に与え、JSON-RPC error、structuredContent、reserved metadata rejection、stdout-only MCP、secret redaction を検証する。
 
-- [ ] **Step 2: Verify red**
+- [x] **Step 2: Verify red**
 
 ```sh
 cargo test --locked --test x_connector stdio
 ```
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `FramedRead/FramedWrite<JsonRpcMessageCodec<Value>>` を max 16 MiB で使い、stdout は MCP frame 専用、authorization URL/diagnostics は stderr に出す。`src/bin/article-collector-x.rs` は Tokio entry point から `run_stdio()` だけを呼ぶ。
 
-- [ ] **Step 4: Verify green/build**
+- [x] **Step 4: Verify green/build**
 
 ```sh
 cargo test --locked --test x_connector stdio
 cargo build --locked --bin article-collector-x
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```sh
 git add src/lib.rs src/x_connector src/bin/article-collector-x.rs tests/x_connector.rs

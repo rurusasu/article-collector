@@ -3,6 +3,7 @@ use article_collector::x_connector::oauth::{
     pkce_challenge, CallbackResult, OAuthClient, OAuthConfig,
 };
 use article_collector::x_connector::remote_mcp::XRemoteMcp;
+use article_collector::x_connector::stdio::{OAuthConfigurator, StdioServer};
 use article_collector::x_connector::token_store::{TokenSet, TokenStore};
 use article_collector::x_connector::{
     descriptor, normalize_response, parse_collect_options, CollectOptions, CollectionMode,
@@ -445,6 +446,158 @@ async fn remote_mcp_refreshes_once_on_401_and_maps_permission_errors() -> anyhow
         server.shutdown().await;
     }
     Ok(())
+}
+
+#[tokio::test]
+async fn stdio_server_handles_protocol_tools_and_collect() -> anyhow::Result<()> {
+    let server = FakeXMcpServer::start().await?;
+    let temp = tempfile::tempdir()?;
+    let store = TokenStore::from_root(temp.path().to_path_buf());
+    store.save(&TokenSet {
+        access_token: "stdio-access".to_string(),
+        refresh_token: None,
+        expires_at: Utc::now() + Duration::minutes(5),
+    })?;
+    let app = StdioServer::new(
+        Url::parse(&server.url())?,
+        store.clone(),
+        None,
+        Arc::new(TestConfigurator),
+    );
+
+    let initialize = app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}
+        }))
+        .await?
+        .unwrap();
+    assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
+
+    assert!(app
+        .handle_message(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        .await?
+        .is_none());
+
+    let tools = app
+        .handle_message(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))
+        .await?
+        .unwrap();
+    let tool_names = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_names,
+        vec![
+            "article_collector_describe_sources",
+            "article_collector_collect",
+            "article_collector_configure"
+        ]
+    );
+
+    let descriptor = app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "article_collector_describe_sources", "arguments": {}}
+        }))
+        .await?
+        .unwrap();
+    assert_eq!(descriptor["result"]["structuredContent"]["name"], "x");
+
+    let collected = app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "article_collector_collect",
+                "arguments": {"source": "twitter", "limit": 1, "options": {"mode": "search", "query": "Rust"}}
+            }
+        }))
+        .await?
+        .unwrap();
+    assert_eq!(
+        collected["result"]["structuredContent"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let configured = app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {"name": "article_collector_configure", "arguments": {}}
+        }))
+        .await?
+        .unwrap();
+    assert_eq!(
+        configured["result"]["structuredContent"]["status"],
+        "configured"
+    );
+
+    let invalid = app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "article_collector_collect",
+                "arguments": {"source": "twitter", "limit": 1, "options": {"mode": "timeline", "query": "Rust"}}
+            }
+        }))
+        .await?
+        .unwrap();
+    assert_eq!(invalid["error"]["code"], -32602);
+
+    let secret_app = StdioServer::new(
+        Url::parse(&server.url())?,
+        store,
+        None,
+        Arc::new(SecretConfigurator),
+    );
+    let secret_error = secret_app
+        .handle_message(json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {"name": "article_collector_configure", "arguments": {}}
+        }))
+        .await?
+        .unwrap();
+    let secret_error_text = secret_error.to_string();
+    assert!(secret_error_text.contains("secret-like"));
+    assert!(!secret_error_text.contains("should-not-leak"));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+struct TestConfigurator;
+
+#[async_trait::async_trait]
+impl OAuthConfigurator for TestConfigurator {
+    async fn configure(&self) -> anyhow::Result<Value> {
+        Ok(json!({"status": "configured"}))
+    }
+}
+
+struct SecretConfigurator;
+
+#[async_trait::async_trait]
+impl OAuthConfigurator for SecretConfigurator {
+    async fn configure(&self) -> anyhow::Result<Value> {
+        Ok(json!({"access_token": "should-not-leak"}))
+    }
 }
 
 fn test_remote_client(server: &FakeXMcpServer) -> anyhow::Result<XRemoteMcp> {

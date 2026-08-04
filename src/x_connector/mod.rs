@@ -1,6 +1,7 @@
 pub mod normalize;
 pub mod oauth;
 pub mod remote_mcp;
+pub mod stdio;
 pub mod token_store;
 pub use normalize::normalize_response;
 

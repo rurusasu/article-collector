@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 pub const READ_ONLY_SCOPES: &str = "tweet.read users.read bookmark.read offline.access";
+pub const AUTHORIZE_URL: &str = "https://twitter.com/i/oauth2/authorize";
+pub const TOKEN_URL: &str = "https://api.x.com/2/oauth2/token";
+pub const REDIRECT_URI: &str = "http://127.0.0.1:53681/callback";
 
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
@@ -20,6 +23,16 @@ pub struct OAuthConfig {
 }
 
 impl OAuthConfig {
+    pub fn from_client_id(client_id: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            client_id: client_id.into(),
+            authorize_url: Url::parse(AUTHORIZE_URL).context("Invalid X OAuth authorize URL")?,
+            token_url: Url::parse(TOKEN_URL).context("Invalid X OAuth token URL")?,
+            redirect_uri: Url::parse(REDIRECT_URI).context("Invalid X OAuth redirect URI")?,
+            scopes: READ_ONLY_SCOPES.to_string(),
+        })
+    }
+
     pub fn for_test(
         client_id: &str,
         authorize_url: &str,
