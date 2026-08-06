@@ -1,9 +1,14 @@
-# Linear Issue Guide
+# Issue Tracking Guide (Legacy Linear Reference)
+
+> このファイルは過去の Linear 運用を記録した互換文書である。現在の repository
+> workflow は root の `AGENTS.md` に定義された運用を優先する。今回の docs 更新では
+> issue tracker への作成・更新は行わない。
 
 ## Overview
 
-This project uses [Linear](https://linear.app/) for issue tracking.
-Follow the rules below when creating issues.
+過去の作業で Linear を使っていた場合の team/project 名と issue 形式を残す。新しい
+実装計画を記録するときは、現在の repository policy と利用中の tracker の運用を
+確認すること。
 
 ## Team & Project
 

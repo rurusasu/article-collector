@@ -79,6 +79,8 @@ pub enum JsonRequest {
 pub enum SearchRequest {
     QueryParam { name: &'static str },
     ArxivSearch,
+    QiitaItems,
+    BlueskySearchPosts,
 }
 
 pub enum CatalogRequest {
@@ -147,6 +149,12 @@ pub enum FetchRoute {
 ```
 
 `FetchRoute` は 1 件の記事または content URL を取得するための概念に限定する。discovery は行わず、サイト名も encode しない。`SiteArticleApi` は `Site.fetch_article` に委譲する。
+
+X/Twitter の recommendation は core の `Site.discovery` を使わない。直接の status URL
+は `Site` の `SocialStatus` として残し、recommendation の `twitter` / `x` /
+`x-twitter` source は signed plugin manifest が所有する。したがって X plugin の
+mode (`search`、`timeline`、`bookmarks`) はこの enum に追加せず、plugin 側の JSON
+Schema で検証する。
 
 ## `SaveType`
 

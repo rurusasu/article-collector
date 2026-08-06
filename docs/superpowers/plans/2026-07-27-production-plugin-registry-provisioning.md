@@ -1,5 +1,9 @@
 # Production Plugin Registry Provisioning Implementation Plan
 
+> **Status (2026-08-06):** trust root、publisher、production verification は完了。
+> empty registry の smoke test は過去の受け入れ条件であり、現在は X plugin が公開済み。
+> 現行仕様は [../../architectures/plugins.md](../../architectures/plugins.md) を参照する。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Provision the production Ed25519 trust root, enable the protected registry publisher, and prove the released core can authenticate an empty production plugin registry.

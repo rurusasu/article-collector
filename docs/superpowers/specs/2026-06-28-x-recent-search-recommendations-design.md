@@ -1,5 +1,9 @@
 # X Recent Search Recommendations Design
 
+> **Status (2026-08-06):** この設計は superseded。Bearer Token と X API v2 recent
+> search を core に組み込まず、現行は OAuth 2.0 PKCE + hosted MCP の signed `x`
+> plugin である。現行仕様は [../../sites/twitter.md](../../sites/twitter.md) を参照する。
+
 ## Goal
 
 Add X/Twitter as a recommend source so `article-collector recommend twitter` and configured `recommend all` runs can collect recent X posts that match a configurable recommendation query.

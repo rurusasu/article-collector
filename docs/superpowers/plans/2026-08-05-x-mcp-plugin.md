@@ -1,5 +1,10 @@
 # X MCP Plugin Implementation Plan
 
+> **Status (2026-08-06):** 実装・検証・release publication は完了。core `v0.6.21`
+> と signed production registry から `x` plugin を install できる。以下は実装時の
+> 計画スナップショットであり、現行仕様は [../../../README.md](../../../README.md) と
+> [../../sites/twitter.md](../../sites/twitter.md) を参照する。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** X/Twitter recommendation discovery を `article-collector-x` の signed MCP plugin に分離し、OAuth 2.0 PKCE で `search`、`timeline`、`bookmarks` を収集できるようにする。

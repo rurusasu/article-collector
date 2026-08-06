@@ -15,6 +15,10 @@
 
 ## 実行時の流れ
 
+core の実行ファイルは `article-collector`、X recommendation plugin の実行ファイルは
+`article-collector-x` である。plugin は core から直接 library call されず、signed
+artifact を別 process として起動する。
+
 ```text
 CLI / config
   -> sites/registry.rs
@@ -64,6 +68,7 @@ CLI / config
 | `src/pipeline/*.rs` | history、artifact、translation、PR 作成など discovery/fetch 後の処理。 | CLI command。 |
 | `src/plugins/registry.rs` / `installer.rs` / `state.rs` | registry trust、artifact 検証、atomic active state。 | `plugin install/update/list/uninstall`。 |
 | `src/plugins/runtime.rs` / `sources.rs` | MCP lifecycle、runtime descriptor 照合、dynamic source candidate 正規化。 | `recommend`、`plugin configure/doctor`。 |
+| `src/x_connector/` | X OAuth、token store、hosted MCP client、plugin-side stdio server。 | `src/bin/article-collector-x.rs` から起動され、core の `src/plugins/runtime.rs` と MCP stdio で接続する。 |
 
 ## site 固有処理の流し方
 
@@ -96,3 +101,6 @@ site 固有の処理は、必ず `src/sites/<site>.rs` を起点にする。
 - `fetch/routes/*.rs` は 1 件の記事取得の共有処理だけを持つ。
 - `ArticleCandidate.site` を source identity とし、別の `source` field は増やさない。
 - built-in/plugin の recommendation candidate は同じ history / fetch / translation / save primitive を使う。
+- X の direct status fetch と recommendation plugin は別の経路であり、direct fetch に
+  plugin install は不要、recommendation にだけ signed `x` plugin の install/configure
+  が必要である。

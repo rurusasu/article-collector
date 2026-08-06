@@ -2,7 +2,16 @@
 
 このファイルは、source 管理で参照する architecture docs と site docs の索引である。詳細な挙動はリンク先に置き、このファイルは compact な map として保つ。
 
+## 現行状態
+
+2026-08-06 時点の core release は `v0.6.21`。X recommendation は built-in discovery
+ではなく、manifest version `0.6.20` の signed `x` plugin として production registry
+から導入する。X の direct status URL fetch は plugin なしで利用できる。
+
 ## アーキテクチャドキュメント一覧
+
+日付付きの設計・実装計画は [superpowers/README.md](superpowers/README.md) に示す
+履歴スナップショットであり、現行仕様の正本ではない。
 
 | ファイル | 要約 | 使う場面 |
 | --- | --- | --- |

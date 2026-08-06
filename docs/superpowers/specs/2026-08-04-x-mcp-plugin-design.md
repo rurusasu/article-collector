@@ -1,5 +1,10 @@
 # X MCP Recommendation Plugin Design
 
+> **Status (2026-08-06):** この設計は実装済み。X plugin は core `v0.6.21` の 5
+> target artifact と signed production registry から導入できる。issue #85 は設計時の
+> tracking reference としてのみ残し、現行仕様は [../../sites/twitter.md](../../sites/twitter.md)
+> と [../../architectures/plugins.md](../../architectures/plugins.md) を参照する。
+
 ## Goal
 
 X/Twitter の recommendation discovery を本体から分離し、ユーザーが
