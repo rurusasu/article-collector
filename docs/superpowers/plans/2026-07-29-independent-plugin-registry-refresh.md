@@ -1,5 +1,9 @@
 # Independent Plugin Registry Refresh Implementation Plan
 
+> **Status (2026-08-06):** 実装・release workflow 検証は完了。現在の production
+> registry は X plugin を含むため、本文にある「#85 公開まで `plugins=[]`」という前提は
+> 当時の状態である。現行運用は [../../ci-cd/README.md](../../ci-cd/README.md) を参照する。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a protected weekly and manual workflow that refreshes the authenticated published plugin registry without waiting for a core release or exposing repository registry content.

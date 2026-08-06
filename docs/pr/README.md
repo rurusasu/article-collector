@@ -16,8 +16,9 @@ Loop all review steps until every issue is resolved to ensure quality.
 ## Changes
 Organized by category
 
-## Linear Issue
-Link to the relevant Linear issue
+## Tracking issue
+Link to the relevant repository issue. Do not assume Linear; follow the repository's current
+issue-tracking policy.
 
 ## Test plan
 - [ ] List items to verify locally
@@ -45,33 +46,13 @@ After PR creation, execute the following steps **in a loop until all issues are 
 
 ### Step 1: PR Review
 
-Run the **pr-review-toolkit** plugin to review code quality.
-
-| Item | Value |
-|------|-------|
-| Plugin | `pr-review-toolkit` |
-| Skill | `review-pr` |
-| Invocation | `/pr-review-toolkit:review-pr` |
-
-```
-/pr-review-toolkit:review-pr
-```
-
-- **Fix all** reported issues
-- Commit and push after fixes
+Review the changed code, relevant tests, and CI results. Resolve actionable review comments
+before proceeding to checklist verification.
 
 ### Step 2: Security Guidance
 
-The **security-guidance** plugin runs automatically as a `PreToolUse` hook during Edit/Write operations. It does not require manual invocation.
-
-| Item | Value |
-|------|-------|
-| Plugin | `security-guidance` |
-| Type | Automatic (PreToolUse hook) |
-
-- Review any security warnings surfaced during Step 1 edits
-- **Fix all** security-related issues
-- Commit and push after fixes
+Run the repository's applicable security checks and review any warnings from CI. Fix
+security-related findings before checklist verification.
 
 ### Step 3: Checklist Verification
 
@@ -129,17 +110,9 @@ For each comment:
 
 If **any fix was made** in Steps 1-4, return to Step 1 and re-run.
 
-Use **ralph-loop** to automate:
-
-| Item | Value |
-|------|-------|
-| Plugin | `ralph-loop` |
-| Skill | `ralph-loop` |
-| Invocation | `/ralph-loop:ralph-loop` |
-
-```
-/ralph-loop:ralph-loop
-```
+このループは、GitHub の review comments と checks が更新されるたびに手動または
+利用可能な CI/agent workflow で再実行する。特定の外部 plugin や slash command を
+前提にしない。
 
 **Loop exit conditions:**
 - Step 1: PR Review reports 0 issues

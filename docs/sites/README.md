@@ -9,6 +9,10 @@
 
 実装は [../architectures/files.md](../architectures/files.md)、[../architectures/enums.md](../architectures/enums.md)、[../architectures/usage.md](../architectures/usage.md) と各 site doc の規約に従う。
 
+X/Twitter は例外的に、direct status URL と recommendation source の所有者が分かれる。
+前者は core の `twitter` site entry、後者は production registry の signed `x` plugin
+である。site doc ではこの境界を明記する。
+
 ## ファイル
 
 | site | ファイル |

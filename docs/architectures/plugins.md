@@ -1,30 +1,32 @@
 # MCP plugin アーキテクチャ
 
 この文書は、optional recommendation source plugin の trust boundary、MCP
-protocol、local state、運用手順を定義する。汎用基盤は GitHub issue
-[#84](https://github.com/rurusasu/article-collector/issues/84)、最初の production
-plugin である X connector は
-[#85](https://github.com/rurusasu/article-collector/issues/85) で追跡する。
+protocol、local state、運用手順を定義する。現行の production plugin は X
+connector であり、core release `v0.6.21` と同じ release workflow から 5 target
+artifact を配布する。X plugin 自体の manifest version は `0.6.20` で、core version
+とは独立している。
 
 ## 利用者向け command
 
 plugin は任意機能で、core binary のインストール後に追加できる。
 
 ```bash
-article-collector plugin install example
-article-collector plugin install example@1.2.3
+article-collector plugin install x
+article-collector plugin install x@0.6.20
 article-collector plugin list
-article-collector plugin update example
-article-collector plugin configure example
-article-collector plugin doctor example
-article-collector plugin uninstall example
+article-collector plugin update x
+article-collector plugin configure x
+article-collector plugin doctor x
+article-collector plugin uninstall x
 ```
 
 `install` / `update` は binary に埋め込まれた trust set と official registry
 URL だけを使う。registry URL override、local executable install、third-party
 registry は protocol v1 の対象外である。production trust key は provision
-済みだが、最初の plugin が #85 で release されるまでは registry の `plugins`
-は空で、install 可能な plugin はない。
+済みである。production の `plugin-registry-v1` には現在 `x` plugin が登録されて
+おり、`article-collector plugin install x` で署名、checksum、MCP descriptor を
+検証して導入できる。repository 内の `registry/plugins-v1.json` は PR 用の空の
+development fixture なので、production registry の状態を表すものではない。
 
 `uninstall` は指定した plugin の directory だけを削除する。アプリケーション
 からは復元できず、必要になった場合は registry から再 install する。
@@ -52,14 +54,16 @@ recommend target / config
 source 名順で実行する。明示 list がある場合は built-in と plugin を混在でき、
 その順序を保つ。
 
-plugin source の設定は `options` 配下へ隔離する。
+plugin source の設定は `options` 配下へ隔離する。現行 X plugin の設定例は次の
+とおりである。
 
 ```toml
-[recommend.source.example]
+[recommend.source.twitter]
 limit = 10
 
-[recommend.source.example.options]
-mode = "latest"
+[recommend.source.twitter.options]
+mode = "search"
+query = "(AI OR Rust OR security) lang:en -is:retweet"
 ```
 
 plugin source は built-in 専用の `query` を拒否し、built-in source は
@@ -230,9 +234,10 @@ secret を失った場合は password manager から復旧し、public key か�
 seed を復元しようとしない。environment の deployment branch は `main` だけに
 制限する。
 
-初回 production smoke test では公開済み JSON/signature の署名検証が成功し、
-registry が fresh かつ単調増加した revision を持ち、`plugins` が空であることを
-確認する。#85 の release までは空の authenticated registry が正常状態である。
+production smoke test では公開済み JSON/signature の署名検証が成功し、registry
+が fresh かつ単調増加した revision を持ち、公開済み plugin artifact の checksum
+が一致することを確認する。現在の registry は X plugin の 5 target artifact を
+含む。空の registry は PR 用 checked-in fixture に限る。
 
 独立 refresh の手動 recovery は Actions の `Plugin Registry Refresh` を
 default branch で dispatch し、成功後に同じ stable release から JSON と
@@ -253,6 +258,8 @@ signature を download して次を確認する。
 - plugin release 後も artifact を registry より先に公開する。
 - stale `.staging-*` は doctor で対象を確認してから exact plugin directory 内で
   cleanup する。
-- #84 の branch/worktree は review・merge・release verification 後に削除する。
-- X 固有 OAuth、timeline mapping、既存 X direct collector の置換は #85 専用
-  branch で行い、汎用基盤 branch に混ぜない。
+- X 固有 OAuth、timeline mapping、hosted MCP 通信は `src/x_connector/` と
+  `article-collector-x` に置き、core の direct X status fetch
+  (`src/sites/twitter.rs` と `src/fetch/routes/social_status.rs`) とは分離する。
+- 新しい plugin を追加するときは、5 target artifact の公開後に manifest、checksum、
+  signed registry entry の順で更新し、production install の smoke test を記録する。

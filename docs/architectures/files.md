@@ -12,9 +12,17 @@
 
 ```text
 src/
+  lib.rs
   main.rs
+  bin/
+    article-collector-x.rs
   config.rs
+  cleanup.rs
+  logging.rs
   paths.rs
+  recommend.rs
+  recommend_artifacts.rs
+  recommend_history.rs
   save.rs
   translate.rs
   target_repos.rs
@@ -87,6 +95,14 @@ src/
     sources.rs
     state.rs
     types.rs
+
+  x_connector/
+    mod.rs
+    normalize.rs
+    oauth.rs
+    remote_mcp.rs
+    stdio.rs
+    token_store.rs
 ```
 
 ## 責務
@@ -97,7 +113,9 @@ src/
 | `fetch/` | route 機構に従って 1 件の記事 URL を取得する | サイト名付きファイルを置かない。サイト固有の記事 API logic は `sites/<site>.rs` が公開し、`site_article_api.rs` 経由で呼び出す。 |
 | `discovery/` | endpoint 機構に従ってサイトまたはページを記事候補へ変換する | サイト名付きファイルを置かない。endpoint module は汎用的な feed/API 形状を取得し、`sites/<site>.rs` が所有する parser function を呼び出す。 |
 | `pipeline/` | discovery 後の処理 | history filtering、article fetch fan-out、translation、artifact 作成、PR 作成を扱う。 |
-| `plugins/` | optional source plugin の trust/lifecycle 境界 | signed registry、safe local state、transactional install、MCP stdio runtime、dynamic source adapter、management CLI を扱う。site 固有 plugin 実装は core repository に置かない。 |
+| `plugins/` | optional source plugin の core 側 trust/lifecycle 境界 | signed registry、safe local state、transactional install、MCP stdio client、dynamic source adapter、management CLI を扱う。site 固有 connector の domain code は `x_connector/` に置く。 |
+| `x_connector/` | X plugin の connector 実装 | OAuth 2.0 PKCE、token store、X hosted MCP client、候補正規化、plugin 側 stdio server を扱う。core の direct status fetch とは別 process で動く。 |
+| `src/bin/article-collector-x.rs` | X plugin の process entrypoint | `x_connector::stdio::run_stdio` だけを起動し、plugin artifact として 5 target に package する。 |
 | `recommend` command | discovery / pipeline entrypoint | target を解決し、discovery / pipeline 内部処理を呼び出す。 |
 
 ## 信頼できる唯一の定義

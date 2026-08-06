@@ -45,18 +45,29 @@ graph TB
 **トリガー:** `main` への push、または手動実行
 
 通常の feature/fix PR が merge されると `release-plz release-pr` が Release PR を作成または更新する。
-Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、`gh release create` で tag と GitHub Release を作成する。その後、同じ workflow 内で各プラットフォーム向けバイナリをビルドして asset としてアップロードする。
+Release PR が merge されると workflow が `Cargo.toml` の version から
+`v<major>.<minor>.<patch>` 形式の tag を解決し、`gh release create` で tag と
+GitHub Release を作成する。その後、同じ workflow 内で core binary と
+`article-collector-x` plugin binary を各プラットフォーム向けに build して asset
+として upload する。現在の core release は `v0.6.21` である。
+
+既存 tag を指す push または手動 dispatch は同じ release を再作成しない。次の
+version bump を含む Release PR を merge したときだけ、新しい release build と
+plugin registry publish が進む。
 5 target の build matrix がすべて成功すると、protected `plugin-registry` environment の publisher が署名済み official registry を公開する。build が失敗または skip された場合は publisher を実行しない。build 成功後も、現在の Cargo version tag が draft/prerelease を除く最新の published core release である場合だけ公開し、古い queued run は成功のまま refresh/sign と upload を skip する。
 
-`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v0.7.0` のような形式を使う。
+`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v<major>.<minor>.<patch>` 形式を使う。
 
-| Asset | Target |
-|-------|--------|
-| `article-collector-linux-amd64` | `x86_64-unknown-linux-gnu` |
-| `article-collector-linux-arm64` | `aarch64-unknown-linux-gnu` |
-| `article-collector-windows-amd64.exe` | `x86_64-pc-windows-msvc` |
-| `article-collector-macos-amd64` | `x86_64-apple-darwin` |
-| `article-collector-macos-arm64` | `aarch64-apple-darwin` |
+| Target | Core asset | Plugin asset |
+|--------|------------|--------------|
+| `x86_64-unknown-linux-gnu` | `article-collector-linux-amd64` | `article-collector-x-linux-amd64` |
+| `aarch64-unknown-linux-gnu` | `article-collector-linux-arm64` | `article-collector-x-linux-arm64` |
+| `x86_64-pc-windows-msvc` | `article-collector-windows-amd64.exe` | `article-collector-x-windows-amd64.exe` |
+| `x86_64-apple-darwin` | `article-collector-macos-amd64` | `article-collector-x-macos-amd64` |
+| `aarch64-apple-darwin` | `article-collector-macos-arm64` | `article-collector-x-macos-arm64` |
+
+したがって core release には 10 個の binary asset があり、plugin registry は
+plugin 側の 5 asset の URL、byte length、SHA-256 を参照する。
 
 > デフォルト `GITHUB_TOKEN` による Release 作成は別 workflow を起動しないため、GitHub App token での Release 作成と asset build/upload は同一 workflow に置いている。
 
@@ -78,6 +89,10 @@ Release PR が merge されると workflow が `Cargo.toml` の version から `
   複数ある場合は fail-closed とする
 - PR CI は public trust set と development fixture だけを検証し、production
   signing key を参照しない
+
+`v0.6.21` では release publisher が 5 target の X plugin artifact と signed
+`plugin-registry-v1` を公開し、production `plugin install x` が可能になった。
+checked-in `registry/plugins-v1.json` は引き続き PR 用 fixture である。
 
 ## Plugin Registry Refresh (`plugin-registry-refresh.yml`)
 

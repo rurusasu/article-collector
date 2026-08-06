@@ -1,5 +1,9 @@
 # Production Plugin Registry Provisioning Design
 
+> **Status (2026-08-06):** この設計は実装済み。本文の empty registry と X connector
+> 未実装の記述は設計時点のスナップショットであり、現行状態は [../../architectures/plugins.md](../../architectures/plugins.md)
+> と [../../sites/twitter.md](../../sites/twitter.md) を参照する。
+
 ## Goal
 
 Provision the production Ed25519 trust root and protected GitHub publishing

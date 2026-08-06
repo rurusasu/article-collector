@@ -1,5 +1,13 @@
 # X / Twitter
 
+現行の recommendation plugin は core release `v0.6.21` と同時に公開された signed
+`x` plugin（manifest version `0.6.20`）である。初回は次で install する。
+
+```bash
+article-collector plugin install x
+article-collector plugin doctor x
+```
+
 ## サイトの識別情報
 
 - サイト名: `twitter`
@@ -17,6 +25,8 @@ tweet URL は `x.com` または `twitter.com` 配下の `/status/<id>` を使う
 ## Recommendation plugin
 
 X の recommendation discovery は core から分離された signed `x` plugin が担当する。
+core の `twitter` site entry には discovery endpoint がなく、X の recommend source は
+installed plugin の manifest から解決される。
 plugin を install すると、source list を指定しない `recommend all` では X も対象になる。
 X を除外したい場合は、`[recommend].sources` に built-in source だけを列挙する。明示的に
 X を使う場合は次を実行する。
@@ -71,6 +81,13 @@ mode = "timeline"
 X API の利用料、rate limit、bookmark permission は X Developer Platform の契約に
 従う。401 は refresh token で一度だけ再試行し、403、429、malformed response、tool
 schema 不一致は安全な診断で終了する。
+
+公式仕様:
+
+- [X MCP Servers](https://docs.x.com/tools/mcp)
+- [Search Posts](https://docs.x.com/x-api/posts/search/introduction)
+- [Bookmarks](https://docs.x.com/x-api/posts/bookmarks/introduction)
+- [Timelines](https://docs.x.com/x-api/posts/timelines/introduction)
 
 ## Candidate normalization
 

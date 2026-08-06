@@ -1,5 +1,9 @@
 # X Recent Search Recommendations Implementation Plan
 
+> **Status (2026-08-06):** この Bearer Token ベースの設計は採用せず、X recommendation
+> は OAuth 2.0 PKCE + hosted MCP の signed plugin に置き換えた。現行仕様は
+> [../../sites/twitter.md](../../sites/twitter.md) を参照する。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add X/Twitter recent-search recommendation discovery to `article-collector recommend twitter` and config-driven `recommend all` runs.
@@ -579,4 +583,3 @@ Set ACS-75 to Done after the plan is committed. Set ACS-76 to Done when implemen
 - Spec coverage: registry, config, token handling, X recent search collector, docs, and verification are covered.
 - Marker scan: no unfinished markers are used.
 - Type consistency: `SearchRequest::XRecentSearch`, `collect_x_recent_search`, `parse_x_recent_search_response`, and `x_bearer_token_from_env` are consistently named across tasks.
-

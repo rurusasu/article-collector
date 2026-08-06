@@ -4,6 +4,10 @@ URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツー
 
 ACP agent 経由で翻訳できる。
 
+現行 core release は `v0.6.21`。X の recommendation plugin は core と分離した
+manifest version `0.6.20` として、同じ release の 5 target plugin artifact から
+配布される。
+
 ## セットアップ
 
 ### 推奨: インストーラーを1コマンドで実行（macOS / Linux）
@@ -119,7 +123,8 @@ article-collector plugin doctor x
 article-collector recommend twitter --config article-collector.toml --limit 10
 ```
 
-`x` plugin は release artifact と signed registry の publish 後に install できる。
+`x` plugin は [v0.6.21 release](https://github.com/rurusasu/article-collector/releases/tag/v0.6.21)
+で release artifact と signed registry が公開済みのため、現在 install できる。
 設定済み token は plugin 専用の user-data 配下へ保存し、core の response/log には
 返さない。`plugin update x`、`plugin uninstall x` も同じ CLI で実行できる。
 
@@ -131,11 +136,11 @@ plugin は実行ユーザーと同じ filesystem/network 権限を持つ。insta
 権限の別 process による data root 改変まで隔離するものではない。
 
 production trust root は provision 済みで、署名を検証できる official registry
-を利用できる。checked-in registry は development fixture として空を保ち、X の
-5 target artifact checksum は release workflow が生成して signed registry に
-publish する。最初の production install は
-[GitHub #85](https://github.com/rurusasu/article-collector/issues/85) の release
-後に `article-collector plugin install x` で行う。
+を利用できる。checked-in registry は PR 検証用の development fixture として空を
+保ち、X の 5 target artifact checksum と signed registry entry は release
+workflow が生成する。現在は `article-collector plugin install x` で production
+registry から X plugin を導入できる。registry の revision と有効期限は core
+release または週次 refresh のたびに変わるため、固定値をローカル docs に複製しない。
 
 official registry は core release と独立して毎週月曜 03:17 UTC に refresh
 され、手動 recovery もできる。refresh は公開済みで署名検証済みの registry
@@ -376,11 +381,12 @@ plugin source 固有設定は、signed manifest が宣言する JSON Schema に�
 `options` を使えない。
 
 ```toml
-[recommend.source.example]
+[recommend.source.twitter]
 limit = 10
 
-[recommend.source.example.options]
-mode = "latest"
+[recommend.source.twitter.options]
+mode = "search"
+query = "(AI OR Rust OR security) lang:en -is:retweet"
 ```
 
 ```toml
@@ -508,8 +514,8 @@ SQLite 履歴だけを消して再収集したい場合は `article-collector hi
 ## 開発
 
 ```bash
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
 taplo format --check Cargo.toml article-collector.toml release-plz.toml
 taplo lint Cargo.toml article-collector.toml release-plz.toml
 cargo test --locked
@@ -532,9 +538,9 @@ task check
 ## リリース
 
 `main` に push されると `.github/workflows/release.yml` が実行される。
-通常の PR merge では release-plz が Release PR を作成・更新する。Release PR が merge されると workflow が `Cargo.toml` の version から `v0.7.0` 形式の tag を解決し、GitHub Release と各 OS 向け asset を同じ workflow 内で作成する。
+通常の PR merge では release-plz が Release PR を作成・更新する。Release PR が merge されると workflow が `Cargo.toml` の version から `v<major>.<minor>.<patch>` 形式の tag を解決し、GitHub Release、core binary、`article-collector-x` plugin binary を同じ workflow 内で作成する。5 target の build が成功した後、plugin registry も更新する。
 
-release-plz は `git_only = true` で動かすため、Release PR の version 判定は git tag を基準にする。tag は release-plz の default に合わせて `v0.7.0` のような形式を使う。
+release-plz は `git_only = true` で動かすため、Release PR の version 判定は git tag を基準にする。tag は `v<major>.<minor>.<patch>` 形式を使う。既存 tag に対して release workflow を手動実行しても、同じ release を再作成せず、次の version bump または registry refresh を待つ。
 
 詳細: [docs/ci-cd/README.md](docs/ci-cd/README.md)
 
