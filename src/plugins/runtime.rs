@@ -440,11 +440,19 @@ fn sanitize_stderr_bytes(bytes: &[u8], secrets: &[String]) -> String {
 }
 
 fn allowed_environment_values(allowed: &[String]) -> Vec<String> {
-    allowed
+    environment_names_for_redaction(allowed, cfg!(windows))
         .iter()
         .filter_map(|name| std::env::var(name).ok())
         .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn environment_names_for_redaction(allowed: &[String], include_system_root: bool) -> Vec<String> {
+    let mut names = allowed.to_vec();
+    if include_system_root && !names.iter().any(|name| name == "SystemRoot") {
+        names.push("SystemRoot".to_string());
+    }
+    names
 }
 
 fn sanitize_json_rpc_error(error: &Value, secrets: &[String]) -> String {
@@ -822,6 +830,13 @@ exit 9
 
         assert!(!output.contains("very-secret-value"));
         assert!(output.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn platform_bootstrap_environment_is_included_in_redaction_names() {
+        let names = environment_names_for_redaction(&[], true);
+
+        assert!(names.iter().any(|name| name == "SystemRoot"));
     }
 
     /// 検証: plugin制御のJSON-RPC error dataを診断へ出さずmessageもbounded/redactedにする

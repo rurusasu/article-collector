@@ -8,14 +8,14 @@
 
 - 利用者向け導線: [../../README.md](../../README.md)
 - module 関係: [../architectures/files.md](../architectures/files.md)、[../architectures/usage.md](../architectures/usage.md)
-- plugin lifecycle: [../architectures/plugins.md](../architectures/plugins.md)
+- plugin runtime/lifecycle: [../plugins/README.md](../plugins/README.md)、配布: [../plugins/distribution.md](../plugins/distribution.md)
 - X plugin: [../sites/twitter.md](../sites/twitter.md)
 - CI/CD: [../ci-cd/README.md](../ci-cd/README.md)
 - テスト: [../tests/README.md](../tests/README.md)
 
 ## 現行状態
 
-- core release: `v0.6.21`
+- core release: `v0.6.23`
 - X plugin manifest: core release tag と同期
 - X plugin: signed production registry から install 可能
 - X direct status fetch: core built-in のまま、plugin install 不要
