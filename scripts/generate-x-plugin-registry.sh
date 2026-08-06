@@ -24,13 +24,17 @@ fail() {
 [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "release tag must be a stable vX.Y.Z tag"
 command -v jq >/dev/null || fail "jq is required"
 
-PLUGIN_NAME="$(jq -er '.name' "$MANIFEST")"
-PLUGIN_VERSION="$(jq -er '.version' "$MANIFEST")"
-SOURCE_NAME="$(jq -er '.sources[0].name' "$MANIFEST")"
-ALIASES_JSON="$(jq -c '.sources[0].aliases // []' "$MANIFEST")"
+RELEASE_VERSION="${RELEASE_TAG#v}"
+# The runtime descriptor uses CARGO_PKG_VERSION, so the signed manifest must use
+# the release tag version rather than a separately maintained template version.
+manifest_json="$(jq -c --arg version "$RELEASE_VERSION" '.version = $version' "$MANIFEST")"
+PLUGIN_NAME="$(jq -er '.name' <<< "$manifest_json")"
+PLUGIN_VERSION="$(jq -er '.version' <<< "$manifest_json")"
+SOURCE_NAME="$(jq -er '.sources[0].name' <<< "$manifest_json")"
+ALIASES_JSON="$(jq -c '.sources[0].aliases // []' <<< "$manifest_json")"
 [ "$PLUGIN_NAME" = "x" ] || fail "manifest plugin name must be x"
 [ "$SOURCE_NAME" = "twitter" ] || fail "manifest source name must be twitter"
-[[ "$PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "manifest version must be stable semver"
+[[ "$PLUGIN_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "release version must be stable semver"
 
 if ! jq -e --arg plugin "$PLUGIN_NAME" --arg source "$SOURCE_NAME" --argjson aliases "$ALIASES_JSON" '
   [
@@ -79,10 +83,9 @@ actual_files="$(find "$ASSET_DIR" -maxdepth 1 -type f -exec basename {} \; | sor
 expected_file_list="$(printf '%s\n' "${expected_files[@]}" | sort)"
 [ "$actual_files" = "$expected_file_list" ] || fail "asset directory must contain exactly the five X plugin artifacts"
 
-manifest_json="$(jq -c . "$MANIFEST")"
 new_version="$(jq -cn \
   --arg version "$PLUGIN_VERSION" \
-  --arg protocol "$(jq -er '.protocol' "$MANIFEST")" \
+  --arg protocol "$(jq -er '.protocol' <<< "$manifest_json")" \
   --argjson manifest "$manifest_json" \
   --argjson artifacts "$artifacts" \
   '{version: $version, protocol: $protocol, manifest: $manifest, artifacts: $artifacts}')"

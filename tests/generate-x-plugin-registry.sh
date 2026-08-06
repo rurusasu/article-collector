@@ -54,14 +54,16 @@ create_assets() {
 }
 
 create_assets
-bash "$GENERATOR" "$SOURCE" "$OUTPUT" v0.6.20 "$ASSETS"
+bash "$GENERATOR" "$SOURCE" "$OUTPUT" v0.6.22 "$ASSETS"
 
 jq -e '.revision == 8' "$OUTPUT" >/dev/null
 jq -e '.plugins | map(select(.name == "example")) | length == 1' "$OUTPUT" >/dev/null
 jq -e '.plugins | map(select(.name == "x")) | length == 1' "$OUTPUT" >/dev/null
+jq -e '.plugins[] | select(.name == "x") | .versions[0].version == "0.6.22"' "$OUTPUT" >/dev/null
+jq -e '.plugins[] | select(.name == "x") | .versions[0].manifest.version == "0.6.22"' "$OUTPUT" >/dev/null
 jq -e '.plugins[] | select(.name == "x") | .versions[0].manifest.sources[0].name == "twitter"' "$OUTPUT" >/dev/null
 jq -e '.plugins[] | select(.name == "x") | .versions[0].artifacts | length == 5' "$OUTPUT" >/dev/null
-jq -e '.plugins[] | select(.name == "x") | .versions[0].artifacts["x86_64-unknown-linux-gnu"].url == "https://github.com/rurusasu/article-collector/releases/download/v0.6.20/article-collector-x-linux-amd64"' "$OUTPUT" >/dev/null
+jq -e '.plugins[] | select(.name == "x") | .versions[0].artifacts["x86_64-unknown-linux-gnu"].url == "https://github.com/rurusasu/article-collector/releases/download/v0.6.22/article-collector-x-linux-amd64"' "$OUTPUT" >/dev/null
 jq -e '.plugins[] | select(.name == "x") | .versions[0].artifacts["x86_64-unknown-linux-gnu"].byte_length > 0' "$OUTPUT" >/dev/null
 cargo run --quiet --locked --example plugin_registry -- validate "$OUTPUT" "$ROOT/registry/trusted-keys.json"
 

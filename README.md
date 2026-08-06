@@ -4,9 +4,8 @@ URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツー
 
 ACP agent 経由で翻訳できる。
 
-現行 core release は `v0.6.21`。X の recommendation plugin は core と分離した
-manifest version `0.6.20` として、同じ release の 5 target plugin artifact から
-配布される。
+現行 core release は `v0.6.21`。X の recommendation plugin は release tag と同じ
+manifest version で、同じ release の 5 target plugin artifact から配布される。
 
 ## セットアップ
 

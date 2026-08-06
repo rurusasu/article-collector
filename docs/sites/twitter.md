@@ -1,7 +1,7 @@
 # X / Twitter
 
-現行の recommendation plugin は core release `v0.6.21` と同時に公開された signed
-`x` plugin（manifest version `0.6.20`）である。初回は次で install する。
+現行の recommendation plugin は core release と同じ release tag で公開される signed
+`x` plugin である。初回は次で install する。
 
 ```bash
 article-collector plugin install x

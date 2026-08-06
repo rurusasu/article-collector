@@ -15,6 +15,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio_util::codec::{FramedRead, FramedWrite};
 
 pub const MAX_MCP_FRAME_BYTES: usize = 16 * 1024 * 1024;
@@ -120,6 +121,7 @@ struct McpSession {
     writer: FramedWrite<ChildStdin, JsonRpcMessageCodec<Value>>,
     stderr: Arc<Mutex<Vec<u8>>>,
     stderr_redactions: Vec<String>,
+    stderr_task: Option<JoinHandle<()>>,
     next_id: u64,
 }
 
@@ -173,7 +175,7 @@ impl McpSession {
             .take()
             .context("Plugin stderr is unavailable")?;
         let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-        tokio::spawn(capture_stderr(stderr, stderr_buffer.clone()));
+        let stderr_task = tokio::spawn(capture_stderr(stderr, stderr_buffer.clone()));
         let stderr_redactions = allowed_environment_values(&plugin.manifest.environment);
 
         let mut session = Self {
@@ -188,6 +190,7 @@ impl McpSession {
             ),
             stderr: stderr_buffer,
             stderr_redactions,
+            stderr_task: Some(stderr_task),
             next_id: 1,
         };
         let startup = tokio::time::timeout(INITIALIZE_TIMEOUT, session.initialize()).await;
@@ -282,6 +285,7 @@ impl McpSession {
                 .cloned()
                 .with_context(|| format!("MCP response for '{method}' has no result"));
         }
+        self.wait_for_stderr().await;
         let stderr = sanitized_stderr(&self.stderr, &self.stderr_redactions).await;
         bail!("Plugin exited before responding to '{method}'{stderr}")
     }
@@ -294,6 +298,7 @@ impl McpSession {
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.child.wait()).await {
             Ok(status) => {
                 let status = status.context("Failed to wait for plugin process")?;
+                self.wait_for_stderr().await;
                 if !status.success() {
                     let stderr = sanitized_stderr(&self.stderr, &self.stderr_redactions).await;
                     bail!("Plugin exited abnormally with {status}{stderr}");
@@ -301,9 +306,23 @@ impl McpSession {
             }
             Err(_) => {
                 self.terminate().await?;
+                self.wait_for_stderr().await;
             }
         }
         Ok(())
+    }
+
+    async fn wait_for_stderr(&mut self) {
+        let Some(mut task) = self.stderr_task.take() else {
+            return;
+        };
+        if tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut task)
+            .await
+            .is_err()
+        {
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     async fn terminate(&mut self) -> Result<()> {
