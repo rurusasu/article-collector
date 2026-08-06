@@ -16,7 +16,7 @@
 ## 現行状態
 
 - core release: `v0.6.21`
-- X plugin manifest: `0.6.20`
+- X plugin manifest: core release tag と同期
 - X plugin: signed production registry から install 可能
 - X direct status fetch: core built-in のまま、plugin install 不要
 - registry fixture: `registry/plugins-v1.json` は PR 検証用の空 fixture

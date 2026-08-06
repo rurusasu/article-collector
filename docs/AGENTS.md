@@ -5,8 +5,8 @@
 ## 現行状態
 
 2026-08-06 時点の core release は `v0.6.21`。X recommendation は built-in discovery
-ではなく、manifest version `0.6.20` の signed `x` plugin として production registry
-から導入する。X の direct status URL fetch は plugin なしで利用できる。
+ではなく、release tag と同期した manifest version の signed `x` plugin として
+production registry から導入する。X の direct status URL fetch は plugin なしで利用できる。
 
 ## アーキテクチャドキュメント一覧
 

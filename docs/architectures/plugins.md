@@ -3,8 +3,8 @@
 この文書は、optional recommendation source plugin の trust boundary、MCP
 protocol、local state、運用手順を定義する。現行の production plugin は X
 connector であり、core release `v0.6.21` と同じ release workflow から 5 target
-artifact を配布する。X plugin 自体の manifest version は `0.6.20` で、core version
-とは独立している。
+artifact を配布する。X plugin の manifest version は release tag から生成し、
+runtime descriptor の package version と一致させる。
 
 ## 利用者向け command
 
@@ -12,7 +12,7 @@ plugin は任意機能で、core binary のインストール後に追加でき�
 
 ```bash
 article-collector plugin install x
-article-collector plugin install x@0.6.20
+article-collector plugin install x@<release-version>
 article-collector plugin list
 article-collector plugin update x
 article-collector plugin configure x
