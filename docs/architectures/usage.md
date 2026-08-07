@@ -9,7 +9,8 @@
 | [files.md](files.md) | 目標 directory / module 構成。 | file の置き場所を変えるときに更新する。 |
 | [enums.md](enums.md) | `Site`、`DiscoveryEndpoint`、`FetchRoute`、`SaveType`、`ArticleCandidate` の型構造。 | field や enum variant を変えるときに更新する。 |
 | [usage.md](usage.md) | module 間の呼び出し順、所有側と利用側の関係。 | pipeline のつながりや責務境界を変えるときに更新する。 |
-| [plugins.md](plugins.md) | optional source の signed registry、MCP lifecycle、trust boundary。 | plugin source または registry/release を変えるときに更新する。 |
+| [../plugins/README.md](../plugins/README.md) | optional source の MCP lifecycle、trust boundary、runtime接続。 | plugin source、protocol、runtimeを変えるときに更新する。 |
+| [../plugins/distribution.md](../plugins/distribution.md) | signed registry、artifact配布、install/update、release/refresh。 | plugin registry、配布、releaseを変えるときに更新する。 |
 | [../sites/<site>.md](../sites/README.md) | site ごとの URL 構造、discovery endpoint、article fetch、保存分類。 | site 固有の知識を変えるときに更新する。 |
 | [../AGENTS.md](../AGENTS.md) | docs 全体の索引。 | docs を追加・削除したときに更新する。 |
 
@@ -92,7 +93,8 @@ site 固有の処理は、必ず `src/sites/<site>.rs` を起点にする。
 | fetch route を増やす | `src/sites/types.rs`、`src/fetch/routes/` | [enums.md](enums.md)、[files.md](files.md)、対象の site doc。 |
 | `recommend` の config 規約を変える | `src/config.rs`、CLI command | [enums.md](enums.md)、README、必要なら site docs。 |
 | pipeline の順序を変える | `src/pipeline/` | この [usage.md](usage.md)。 |
-| plugin lifecycle を変える | `src/plugins/` | [plugins.md](plugins.md)、README。 |
+| plugin lifecycle を変える | `src/plugins/` | [../plugins/README.md](../plugins/README.md)、README。 |
+| plugin 配布を変える | `.github/workflows/`、registry publisher | [../plugins/distribution.md](../plugins/distribution.md)、[../ci-cd/README.md](../ci-cd/README.md)、README。 |
 
 ## 境界の確認
 

@@ -4,7 +4,7 @@
 
 ## 現行状態
 
-2026-08-06 時点の core release は `v0.6.21`。X recommendation は built-in discovery
+2026-08-07 時点の core release は `v0.6.23`。X recommendation は built-in discovery
 ではなく、release tag と同期した manifest version の signed `x` plugin として
 production registry から導入する。X の direct status URL fetch は plugin なしで利用できる。
 
@@ -18,7 +18,9 @@ production registry から導入する。X の direct status URL fetch は plugi
 | [architectures/files.md](architectures/files.md) | サイト固有 code を `sites/` に、機構別 code を `discovery/` / `fetch/` に置く file/module 構成規約。 | fetch/discovery の file/module 構成を確認するとき。 |
 | [architectures/enums.md](architectures/enums.md) | `Site`、機構別 `DiscoveryEndpoint`、機構別 `FetchRoute`、`SaveType`、`ArticleCandidate` の理想的な enum/type model。 | discovery endpoint、fetch route、typed save category を変更するとき。 |
 | [architectures/usage.md](architectures/usage.md) | docs と実装 module のつながり、所有側と利用側、実行時の流れ。 | file 間の関係、pipeline の順序、site 固有処理の流し方を確認するとき。 |
-| [architectures/plugins.md](architectures/plugins.md) | signed registry、MCP protocol、plugin lifecycle、trust boundary、release/cleanup。 | optional source plugin、registry、plugin CLI を変更するとき。 |
+| [plugins/README.md](plugins/README.md) | MCP protocol、recommendation接続、plugin lifecycle、trust boundary、local state。 | plugin runtime、source namespace、MCP contract を変更するとき。 |
+| [plugins/distribution.md](plugins/distribution.md) | registry、install/update、artifact、署名、release/refresh、production smoke test。 | plugin 配布、registry、release workflow を変更するとき。 |
+| [plugins/secret.md](plugins/secret.md) | plugin OAuth credential、runtime secret、registry signing secret の取り扱い。 | credential、token、secret、署名鍵を変更するとき。 |
 
 ## サイトドキュメント一覧
 
@@ -55,6 +57,7 @@ production registry から導入する。X の direct status URL fetch は plugi
 | discovery 機構を追加する | [architectures/enums.md](architectures/enums.md) と対象 site doc を更新する。site-specific parsing は `sites/<site>.rs` に置く。 |
 | 目標 file layout を変更する | [architectures/files.md](architectures/files.md) を更新する。 |
 | file 間のつながりを変更する | [architectures/usage.md](architectures/usage.md) を更新する。 |
-| plugin protocol/registry/lifecycle を変更する | [architectures/plugins.md](architectures/plugins.md) と README を更新する。 |
+| plugin protocol/lifecycle を変更する | [plugins/README.md](plugins/README.md) と README を更新する。 |
+| plugin 配布/registry/release を変更する | [plugins/distribution.md](plugins/distribution.md)、[ci-cd/README.md](ci-cd/README.md)、README を更新する。 |
 | URL matching または fetch route を変更する | 対象 site doc を更新する。 |
 | CLI/config の規約を変更する | architecture docs と README を一緒に更新する。 |

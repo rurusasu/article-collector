@@ -61,10 +61,16 @@ fn site_docs_and_site_modules_have_matching_site_files() {
 #[test]
 fn plugin_architecture_is_documented_and_indexed() {
     let root = manifest_root();
-    let plugin_doc = root.join("docs/architectures/plugins.md");
+    let plugin_doc = root.join("docs/plugins/README.md");
+    let distribution_doc = root.join("docs/plugins/distribution.md");
+    let secret_doc = root.join("docs/plugins/secret.md");
     assert!(plugin_doc.exists());
+    assert!(distribution_doc.exists());
+    assert!(secret_doc.exists());
     let index = fs::read_to_string(root.join("docs/AGENTS.md")).unwrap();
-    assert!(index.contains("architectures/plugins.md"));
+    assert!(index.contains("plugins/README.md"));
+    assert!(index.contains("plugins/distribution.md"));
+    assert!(index.contains("plugins/secret.md"));
 }
 
 fn manifest_root() -> PathBuf {

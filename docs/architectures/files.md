@@ -145,7 +145,8 @@ src/
 6. `docs/sites/<site>.md` を追加する。
 
 core binary の変更なしで追加する optional source は `sites/` に追加せず、
-[plugins.md](plugins.md) の protocol と official registry を使う。built-in site
+[plugins/README.md](../plugins/README.md) の protocol と
+[plugins/distribution.md](../plugins/distribution.md) の official registry を使う。built-in site
 と plugin source/alias は共有 namespace を持つ。
 
 ## 実装規約

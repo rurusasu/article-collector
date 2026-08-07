@@ -4,8 +4,24 @@ URL -> 記事取得 -> 翻訳 -> PR 作成を自動化する Rust 製 CLI ツー
 
 ACP agent 経由で翻訳できる。
 
-現行 core release は `v0.6.21`。X の recommendation plugin は release tag と同じ
-manifest version で、同じ release の 5 target plugin artifact から配布される。
+現行 core release は [latest release](https://github.com/rurusasu/article-collector/releases/latest)
+で確認できる。X の recommendation plugin は release tag と同じ manifest version で、
+同じ release の 5 target plugin artifact から配布される。
+
+## 目次
+
+- [セットアップ](#セットアップ)
+- [まず使う](#まず使う)
+- [処理フロー](#処理フロー)
+- [機能別の使い方](#機能別の使い方)
+- [コマンド一覧](#コマンド一覧)
+- [設定](#設定)
+- [対応 URL と保存分類](#対応-url-と保存分類)
+- [詳細ドキュメント](#詳細ドキュメント)
+- [開発](#開発)
+- [リリース](#リリース)
+- [トラブルシューティング](#トラブルシューティング)
+- [ライセンス](#ライセンス)
 
 ## セットアップ
 
@@ -34,7 +50,16 @@ New-Item -ItemType Directory -Force $binDir | Out-Null
 Invoke-WebRequest `
   -Uri "https://github.com/rurusasu/article-collector/releases/latest/download/$asset" `
   -OutFile "$binDir\article-collector.exe"
+$env:Path = "$binDir;$env:Path"
+& "$binDir\article-collector.exe" --version
 ```
+
+`$env:Path` の変更は現在の PowerShell セッションだけに適用される。次回以降も
+PATH に含める場合は、`$binDir` をユーザー環境変数 `Path` に追加する。
+
+`collect` で PR を作成する場合は [GitHub CLI](https://cli.github.com/) を別途
+インストールし、選択した ACP agent（例: Codex）も利用可能にする。どちらも
+`article-collector` のインストーラーには含まれない。
 
 ### 代替: GitHub Releases の手動取得
 
@@ -65,42 +90,60 @@ winget install Rustlang.Rustup
 
 新しい PowerShell を開き直してから、上の `cargo install` を実行する。
 
-### GitHub CLI の認証
+## まず使う
 
-`pr` / `collect` の PR 作成ステップは `gh` CLI を使うため、事前に認証が必要:
+インストール後、まず version と記事取得だけを確認する。`fetch` と単一 source の
+`recommend` は ACP agent や GitHub 認証を必要としない。
+
+```bash
+article-collector --version
+article-collector fetch https://news.ycombinator.com/item?id=42575537
+article-collector recommend hackernews --limit 10
+```
+
+PR作成まで実行する場合は、先に GitHub CLI と翻訳 agent を認証する。初回確認では
+自動 merge を無効にする。
 
 ```bash
 gh auth login
+codex login
+export ACP_AGENT="codex"
+export TARGET_REPO="your-org/your-repo"
+export AUTO_MERGE="false"
+article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
+
+Windows PowerShellでは環境変数の設定と実行ファイルの呼び出しを次のように書く:
+
+```powershell
+$env:ACP_AGENT = "codex"
+$env:TARGET_REPO = "your-org/your-repo"
+$env:AUTO_MERGE = "false"
+& "$env:USERPROFILE\bin\article-collector.exe" collect "https://news.ycombinator.com/item?id=42575537"
+```
+
+`collect` / `recommend` の詳細、X plugin、設定ファイルの例は次の機能別セクションを
+参照する。
 
 ## 処理フロー
 
 `article-collector collect <URL>` の全体フロー:
 
-```mermaid
-sequenceDiagram
-    actor User
-    participant CLI as article-collector
-    participant Fetch as fetch
-    participant LLM as ACP agent
-    participant Save as save
-    participant Target as target_repos
-
-    User->>CLI: article-collector collect <URL>
-    CLI->>Fetch: fetch_url(URL)
-    Fetch-->>CLI: raw.json
-    CLI->>LLM: translate(raw.json)
-    LLM-->>CLI: translated.md
-    CLI->>Target: prepare article branch
-    CLI->>Save: write Markdown
-    CLI->>Target: commit / push / PR
-    alt AUTO_MERGE=true
-        Target->>Target: merge PR
-    end
-    Target-->>User: PR or merged article
+```text
+User -> article-collector collect URL
+  -> fetch URL -> raw.json
+  -> ACP agent translate -> translated.md
+  -> target repository: prepare article branch
+  -> save Markdown
+  -> commit / push / PR
+  -> AUTO_MERGE=true の場合は PR を merge
+  -> User: PR または merged article
 ```
 
-## クイックスタート
+> **注意:** `AUTO_MERGE=true` は作成した PR を自動で merge する。動作確認や
+> 初回導入では `AUTO_MERGE=false` を指定する。
+
+## 機能別の使い方
 
 fetch のみなら翻訳 agent や GitHub 認証なしで試せる。
 
@@ -108,7 +151,7 @@ fetch のみなら翻訳 agent や GitHub 認証なしで試せる。
 article-collector fetch https://news.ycombinator.com/item?id=42575537
 ```
 
-### Optional source plugin
+### X recommendation plugin
 
 core binary のインストール後、official signed registry から recommendation
 source plugin を追加できる。
@@ -122,10 +165,14 @@ article-collector plugin doctor x
 article-collector recommend twitter --config article-collector.toml --limit 10
 ```
 
-`x` plugin は [v0.6.21 release](https://github.com/rurusasu/article-collector/releases/tag/v0.6.21)
-で release artifact と signed registry が公開済みのため、現在 install できる。
-設定済み token は plugin 専用の user-data 配下へ保存し、core の response/log には
-返さない。`plugin update x`、`plugin uninstall x` も同じ CLI で実行できる。
+`x` plugin は [latest release](https://github.com/rurusasu/article-collector/releases/latest)
+の release artifact と signed registry から install できる。OAuth credential の取り扱いは
+[X OAuthとplugin secretの設定](docs/plugins/secret.md) に記載する。
+`plugin update x`、`plugin uninstall x` も同じ CLI で実行できる。
+
+`search` は非空の `query` を必須とし、`timeline` / `bookmarks` は query を受け付けない。
+いずれも `limit` までページングし、同じ post ID は重複排除する。X API の利用料・rate
+limit・bookmark permission は X Developer Platform の契約に従う。
 
 plugin は MCP stdio server として別 process で動作する。署名と checksum は
 配布物の publisher/integrity を検証するが、完全な OS sandbox ではないため、
@@ -134,23 +181,10 @@ plugin は実行ユーザーと同じ filesystem/network 権限を持つ。insta
 できない。timeout 時は専用 process group/Job Object を終了するが、同一ユーザー
 権限の別 process による data root 改変まで隔離するものではない。
 
-production trust root は provision 済みで、署名を検証できる official registry
-を利用できる。checked-in registry は PR 検証用の development fixture として空を
-保ち、X の 5 target artifact checksum と signed registry entry は release
-workflow が生成する。現在は `article-collector plugin install x` で production
-registry から X plugin を導入できる。registry の revision と有効期限は core
-release または週次 refresh のたびに変わるため、固定値をローカル docs に複製しない。
-
-official registry は core release と独立して毎週月曜 03:17 UTC に refresh
-され、手動 recovery もできる。refresh は公開済みで署名検証済みの registry
-assets だけを入力にし、revision と timestamps 以外の plugin payload を変更
-しない。現在の refresh signer は single-key 境界のため、認証済み signature が
-複数ある key rotation overlap 中は既存 assets を置換せず fail-closed とする。
-full multi-key overlap 対応は
-[GitHub #92](https://github.com/rurusasu/article-collector/issues/92) で追跡する。
-
-storage、protocol、release/rotation 手順は
-[MCP plugin architecture](docs/architectures/plugins.md) を参照する。
+MCP protocolとtrust boundaryは [MCP plugin](docs/plugins/README.md)、registry・
+release・refreshなどplugin配布の運用は [Plugin 配布](docs/plugins/distribution.md) を
+参照する。secretの値やredaction規則は [X OAuthとplugin secretの設定](docs/plugins/secret.md)
+にまとめている。
 
 レコメンド/関連リンクを上位30件集める場合:
 
@@ -177,22 +211,14 @@ article-collector recommend all --limit 30
 
 `ACP_AGENT` が未設定の場合は `raw.json` 作成後に翻訳を skip する。
 
-`article-collector.toml` が current directory にある場合、`recommend all` は source 別設定を読み込む。`[recommend].sources` が未指定または空の場合は registry 上の全 recommend source を使い、非空の list がある場合はその list に対象 source と順序を限定する。別パスの設定を使う場合は `--config` を指定する。
+`article-collector.toml` が current directory にある場合、`recommend all` は source 別設定を読み込む。`[recommend].sources` が未指定または空の場合は、core内のbuilt-in source registryをregistry順で、その後にinstalled plugin catalogのsourceを名前順で使う。非空の list がある場合はその list に対象 source と順序を限定する。別パスの設定を使う場合は `--config` を指定する。
 
 ```bash
 article-collector recommend all --config article-collector.toml
 ```
 
-`twitter` / `x` / `x-twitter` recommendation source は optional な signed `x`
-plugin が所有する。初回に `X_OAUTH_CLIENT_ID` を設定して
-`article-collector plugin install x` → `article-collector plugin configure x` を
-実行する。OAuth 2.0 PKCE の read-only scopes は
-`tweet.read users.read bookmark.read offline.access` のみで、write scope は要求
-しない。plugin は `search`、`timeline`、`bookmarks` の3 modeを提供する。
-
-`search` は非空の `query` を必須とし、`timeline` / `bookmarks` は query を受け付けない。
-いずれも `limit` までページングし、同じ post ID は重複排除する。X API の利用料・rate
-limit・bookmark permission は X Developer Platform の契約に従う。checked-in の
+`twitter` / `x` / `x-twitter` recommendation source は、上記の [X recommendation plugin](#x-recommendation-plugin)
+が所有する。checked-in の
 `article-collector.toml` は `[recommend].sources` に `twitter` を含めないため、X を
 除外したまま実行できる。plugin 未 install の状態で X を明示指定した場合は install を
 案内する。
@@ -212,7 +238,7 @@ article-collector recommend hackernews --limit 10 --config article-collector.tom
 article-collector recommend https://example.com/links --limit 5 --config article-collector.toml
 ```
 
-`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。一時成果物は `ARTICLE_COLLECTOR_TEMP_DIR` 配下に作成される。
+`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。一時成果物は `ARTICLE_COLLECTOR_TEMP_DIR` 配下に作成される。`ACP_AGENT` が設定されている場合は記事別翻訳 Markdown、`translated.md` index、SQLite seen 記録まで作成し、未設定の場合は記事別 JSON だけを作成する。
 
 ```text
 raw.json
@@ -301,9 +327,11 @@ PR 作成用の target repo は `TARGET_DIR` を再利用する前に git work t
 Codex を ACP 経由で使う場合:
 
 ```bash
+gh auth login
 codex login
 export ACP_AGENT="codex"
 export TARGET_REPO="your-org/your-repo"
+export AUTO_MERGE="false"
 
 article-collector collect https://news.ycombinator.com/item?id=42575537
 ```
@@ -338,10 +366,10 @@ export ACP_AGENT="gemini"
 | `article-collector recommend github-advisory --limit 10` | GitHub Global Security Advisories API から公開 advisory を収集 | `raw.json` に security advisory 推薦一覧を作成 |
 | `article-collector recommend cisa-kev --limit 10` | CISA KEV catalog から悪用確認済み CVE を収集 | CVE ごとの NVD URL を使った推薦一覧を作成 |
 | `article-collector recommend github-search --query "<QUERY>" --limit 5` | GitHub Search API から OSS repository 候補を収集 | `raw.json` に repository 推薦一覧を作成 |
-| `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集し、翻訳まで実行 | `raw.json` に推薦一覧を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
+| `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集する。`ACP_AGENT` 設定時だけ翻訳する | `raw.json` を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
 | `article-collector recommend all --config article-collector.toml` | source 別 config を使って推薦記事を収集 | `raw.json` に推薦一覧を作成。`[recommend].sources` が非空なら対象 source をその list に限定し、source 別 options / limit / 記事本文取得 / PR 作成を config で上書き |
 | `article-collector history clear --config article-collector.toml` | SQLite recommend history を clear | 次回以降の `recommend` で既読記事も再出力可能にする |
-| `article-collector history clear all --config article-collector.toml` | SQLite recommend history と env 指定 artifact directory を clear | `history clear` に加えて、`ARTICLE_COLLECTOR_TEMP_DIR` / `ARTICLE_COLLECTOR_OUTPUT_DIR` と配下ファイルを削除する |
+| `article-collector history clear all --config article-collector.toml` | SQLite recommend history と env 指定 artifact directory を clear | `history clear` に加えて、`ARTICLE_COLLECTOR_TEMP_DIR` / `ARTICLE_COLLECTOR_OUTPUT_DIR` と配下ファイルを削除する。実行前に削除対象を確認する |
 | `article-collector plugin install <NAME[@VERSION]>` | official signed registry から compatible plugin を install | artifact の byte length/SHA-256 と MCP descriptor を検証後、version を atomic activate |
 | `article-collector plugin list` | installed plugin を名前順で表示 | plugin 名、version、source を表示 |
 | `article-collector plugin update <NAME>` | latest compatible version へ update | current version と同じ場合は no-op |
@@ -351,29 +379,32 @@ export ACP_AGENT="gemini"
 
 ## 設定
 
-| Variable | Required | Default | Description |
+| 環境変数 | 必要な操作 | Default | 説明 |
 |----------|----------|---------|-------------|
-| `ARTICLE_COLLECTOR_TEMP_DIR` | No | OS 依存 | `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中に使う temporary directory |
-| `ARTICLE_COLLECTOR_OUTPUT_DIR` | No | - | target repo 内の `*-news` directory 配下にある `.md` files をコピーする最終成果物 directory |
-| `ACP_AGENT` | Yes | - | 内蔵 mapping から選ぶ ACP agent。`codex` / `gemini` / `claude` |
-| `X_OAUTH_CLIENT_ID` | X plugin使用時 | - | X Developer Platform の public OAuth 2.0 PKCE client ID。client secret は使わない |
-| `TRANSLATE_LANG` | No | `ja` | 翻訳先言語コード |
-| `TARGET_REPO` | Yes | - | 保存先 GitHub リポジトリ (`owner/repo`) |
-| `TARGET_DIR` | No | OS 依存 | 保存先 repo のローカル clone 先 |
-| `ARTICLE_COLLECTOR_GH_BIN` | No | `gh` | PR 作成に使う GitHub CLI executable path |
-| `SAVE_PATH_TEMPLATE` | No | `articles/${TYPE}/` | 保存先パステンプレート |
-| `AUTO_MERGE` | No | `true` | PR 作成後に merge する |
+| `ARTICLE_COLLECTOR_TEMP_DIR` | `fetch` / `translate` / `save` / `collect` / `recommend` | OS 依存 | `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中に使う temporary directory |
+| `ARTICLE_COLLECTOR_OUTPUT_DIR` | `save` / `collect` / 成果物コピーを行うrecommend | - | target repo 内の `*-news` directory 配下にある `.md` files をコピーする最終成果物 directory |
+| `ACP_AGENT` | `translate` / `collect` / `recommend all` の翻訳 | - | 内蔵 mapping から選ぶ ACP agent。`codex` / `gemini` / `claude`。未指定なら翻訳を skip する |
+| `X_OAUTH_CLIENT_ID` | `plugin configure x` | - | X Developer Platformのpublic OAuth 2.0 PKCE client ID。詳細は [X OAuthとplugin secretの設定](docs/plugins/secret.md) |
+| `TRANSLATE_LANG` | `translate` / `collect` / `recommend all` の翻訳 | `ja` | 翻訳先言語コード |
+| `TARGET_REPO` | `save` / `pr` / `collect` / `create_pr = true` のrecommend | - | 保存先 GitHub リポジトリ (`owner/repo`) |
+| `TARGET_DIR` | `save` / `pr` / `collect` | OS 依存 | 保存先 repo のローカル clone 先 |
+| `ARTICLE_COLLECTOR_GH_BIN` | `pr` / PR作成を行う `collect`・recommend | `gh` | PR 作成に使う GitHub CLI executable path |
+| `SAVE_PATH_TEMPLATE` | `save` / `collect` / `create_pr = true` のrecommend | `articles/${TYPE}/` | 保存先パステンプレート |
+| `AUTO_MERGE` | PR作成を行う `pr` / `collect`・recommend | `true` | `true` の場合だけ PR 作成後に merge する。初回は `false` 推奨 |
 
 \* 未指定または空文字の場合、翻訳は実行されず `translated.md` は作成されない。`collect` は保存/PR 作成に進まない。
-\*\* `save` / `pr` / `collect` の保存・PR ステップのみ必要。
+\* `TARGET_REPO` は `save` / `pr` / `collect` の保存・PR ステップと、recommend の `create_pr = true` の場合だけ必要。
+
+> **削除操作:** `history clear all` は、設定済みの `ARTICLE_COLLECTOR_TEMP_DIR` と
+> `ARTICLE_COLLECTOR_OUTPUT_DIR` の directory 自体と配下ファイルを削除する。必要な
+> 成果物を退避してから実行すること。
 
 ### TOML config
 
 `article-collector.toml` は current directory から自動検出する。明示的に別ファイルを使う場合は `--config <PATH>` を指定する。
 
-X plugin の callback URL は `http://127.0.0.1:53681/callback` で、X Developer
-Platform 側にも同じ URL を登録する。`plugin configure x` が表示する authorization
-URL を開いて同意すると、read-only token が local-data の plugin storage に保存される。
+X pluginのcallback URL、OAuth scope、tokenの保存場所は
+[X OAuthとplugin secretの設定](docs/plugins/secret.md)に記載する。
 
 plugin source 固有設定は、signed manifest が宣言する JSON Schema に従って
 `options` 配下へ書く。plugin source では `query`、built-in source では
@@ -389,6 +420,8 @@ query = "(AI OR Rust OR security) lang:en -is:retweet"
 ```
 
 ```toml
+# この例の sources は built-in source だけを明示している。
+# X plugin を recommend all に含める場合は、list に "twitter" を追加する。
 [recommend]
 sources = [
   "hackernews",
@@ -509,6 +542,16 @@ agent から `session/request_permission` が来た場合は `cancelled` で応�
 `recommend` は SQLite の既読履歴で過去に `raw.json` へ出力した記事 URL を管理し、次回以降は同じ記事を `raw.json` に出力しない。`ARTICLE_COLLECTOR_TEMP_DIR` は `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中の temporary directory だけを変更し、履歴 DB の場所や最終成果物の保存先は変更しない。履歴 DB は既定ではユーザー設定ディレクトリ配下の `article-collector/recommend-history.sqlite` に作成する。別の場所を使う場合は `[recommend].history_path` を指定する。候補自体が 0 件の場合は `No recommended articles found for <target>`、全候補が既読だった場合は `No new recommended articles found for <target>` で非ゼロ終了する。
 
 SQLite 履歴だけを消して再収集したい場合は `article-collector history clear` を実行する。`--config` を指定すると `[recommend].history_path` の DB を clear する。実行時 artifact もまとめて消す場合は `article-collector history clear all` を実行する。`all` では `ARTICLE_COLLECTOR_TEMP_DIR` または `ARTICLE_COLLECTOR_OUTPUT_DIR` が設定されている場合、その directory 自体と配下ファイルも削除する。環境変数が未設定の場合、既定の temporary directory は削除しない。
+
+## 詳細ドキュメント
+
+| 読者 | 内容 |
+|------|------|
+| plugin 利用者 | [Plugin 配布](docs/plugins/distribution.md)：registry、install/update、release/refresh、production smoke test |
+| plugin 実装者 | [MCP plugin](docs/plugins/README.md)：MCP protocol、trust boundary、local state、recommendation接続 |
+| secret を設定する利用者 | [X OAuthとplugin secretの設定](docs/plugins/secret.md)：callback、OAuth scope、token保存、redaction |
+| CI・release の運用者 | [CI/CD documentation](docs/ci-cd/README.md)：release publisher、署名済みregistry、refresh workflow |
+| repository の開発者 | [docs/AGENTS.md](docs/AGENTS.md)：ドキュメント構成と更新ルール |
 
 ## 開発
 

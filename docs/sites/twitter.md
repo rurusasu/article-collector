@@ -38,9 +38,8 @@ article-collector plugin configure x
 ```
 
 X Developer Platform には loopback callback URL
-`http://127.0.0.1:53681/callback` を登録する。OAuth 2.0 PKCE で要求する scope は
-`tweet.read users.read bookmark.read offline.access` のみで、write scope は要求しない。
-client secret は使わず、token は connector の local-data storage に保存する。
+callback URL、OAuth scope、client secretを使わないこと、tokenの保存場所は
+[plugin secret guide](../plugins/secret.md)に記載する。
 
 plugin の endpoint は X hosted MCP `https://api.x.com/mcp` で、`tools/list` によって
 required read tool と input schema を検証する。tool 契約が変わった場合は fail-closed

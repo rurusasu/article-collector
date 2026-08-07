@@ -3703,10 +3703,19 @@ mod tests {
             ..Default::default()
         };
         let logger = Logger::root(slog::Discard, slog::o!());
+        let catalog = PluginSourceCatalog::default();
 
-        let error = collect_recommended_with_logger(&url, Some(5), None, &config, &logger)
-            .await
-            .unwrap_err();
+        let error = collect_recommended_with_plugins(
+            &url,
+            Some(5),
+            None,
+            &config,
+            &logger,
+            &catalog,
+            &PluginRuntime,
+        )
+        .await
+        .unwrap_err();
 
         assert_eq!(
             error.to_string(),
