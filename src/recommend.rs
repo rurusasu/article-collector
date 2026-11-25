@@ -1635,13 +1635,13 @@ fn parse_zenn_feed(feed: &str, limit: usize) -> Result<Vec<Value>> {
             Ok(Event::Text(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_zenn_text(item, field, &text.decode()?);
+                    apply_zenn_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::CData(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_zenn_text(item, field, &text.decode()?);
+                    apply_zenn_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::End(element)) => {
@@ -1752,13 +1752,13 @@ fn parse_rss_feed(feed: &str, site_name: &'static str, limit: usize) -> Result<V
             Ok(Event::Text(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_generic_rss_text(item, field, &text.decode()?);
+                    apply_generic_rss_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::CData(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_generic_rss_text(item, field, &text.decode()?);
+                    apply_generic_rss_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::GeneralRef(reference)) => {
@@ -1858,13 +1858,13 @@ fn parse_atom_feed(feed: &str, site_name: &'static str, limit: usize) -> Result<
             Ok(Event::Text(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_generic_atom_text(item, field, &text.decode()?);
+                    apply_generic_atom_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::CData(text)) => {
                 if let (Some(item), Some(field)) = (current_item.as_mut(), current_field.as_deref())
                 {
-                    apply_generic_atom_text(item, field, &text.decode()?);
+                    apply_generic_atom_text(item, field, text.as_ref());
                 }
             }
             Ok(Event::GeneralRef(reference)) => {
@@ -1916,11 +1916,11 @@ fn apply_atom_link(
     if local_xml_name(element.name().as_ref()) != "link" {
         return Ok(());
     }
-    let rel = xml_attr_value(element, b"rel")?;
+    let rel = xml_attr_value(element, "rel")?;
     if rel.as_deref().unwrap_or("alternate") != "alternate" {
         return Ok(());
     }
-    if let Some(href) = xml_attr_value(element, b"href")? {
+    if let Some(href) = xml_attr_value(element, "href")? {
         item.url = normalize_url(href);
     }
     Ok(())
@@ -2037,14 +2037,14 @@ fn parse_arxiv_feed(feed: &str, limit: usize) -> Result<Vec<Value>> {
                 if let (Some(entry), Some(field)) =
                     (current_entry.as_mut(), current_field.as_deref())
                 {
-                    apply_arxiv_text(entry, field, &text.decode()?);
+                    apply_arxiv_text(entry, field, text.as_ref());
                 }
             }
             Ok(Event::CData(text)) => {
                 if let (Some(entry), Some(field)) =
                     (current_entry.as_mut(), current_field.as_deref())
                 {
-                    apply_arxiv_text(entry, field, &text.decode()?);
+                    apply_arxiv_text(entry, field, text.as_ref());
                 }
             }
             Ok(Event::End(element)) => {
@@ -2088,8 +2088,8 @@ fn handle_arxiv_empty_like_element(
 
     match name.as_str() {
         "link" => {
-            let href = xml_attr_value(element, b"href")?;
-            let rel = xml_attr_value(element, b"rel")?;
+            let href = xml_attr_value(element, "href")?;
+            let rel = xml_attr_value(element, "rel")?;
             if rel.as_deref().unwrap_or("alternate") == "alternate"
                 && let Some(href) = href
             {
@@ -2097,7 +2097,7 @@ fn handle_arxiv_empty_like_element(
             }
         }
         "category" => {
-            if let Some(term) = xml_attr_value(element, b"term")? {
+            if let Some(term) = xml_attr_value(element, "term")? {
                 entry.categories.push(term);
             }
         }
@@ -2258,20 +2258,17 @@ fn github_search_repository_to_recommendation(data: &Value, rank: usize) -> Opti
     }))
 }
 
-fn local_xml_name(name: &[u8]) -> String {
-    let raw = String::from_utf8_lossy(name);
-    raw.rsplit_once(':')
-        .map(|(_, local)| local.to_string())
-        .unwrap_or_else(|| raw.to_string())
+fn local_xml_name(name: &str) -> String {
+    name.rsplit_once(':')
+        .map_or(name, |(_, local)| local)
+        .to_owned()
 }
 
-fn xml_attr_value(element: &BytesStart<'_>, key: &[u8]) -> Result<Option<String>> {
+fn xml_attr_value(element: &BytesStart<'_>, key: &str) -> Result<Option<String>> {
     for attr in element.attributes() {
         let attr = attr?;
         if attr.key.as_ref() == key {
-            return Ok(Some(
-                String::from_utf8_lossy(attr.value.as_ref()).to_string(),
-            ));
+            return Ok(Some(attr.value.as_ref().to_owned()));
         }
     }
     Ok(None)
@@ -2289,8 +2286,7 @@ fn xml_general_ref_text(reference: &BytesRef<'_>) -> Result<String> {
         return Ok(ch.to_string());
     }
 
-    let decoded = reference.decode()?;
-    let text = match decoded.as_ref() {
+    let text = match reference.as_ref() {
         "amp" => "&".to_string(),
         "lt" => "<".to_string(),
         "gt" => ">".to_string(),

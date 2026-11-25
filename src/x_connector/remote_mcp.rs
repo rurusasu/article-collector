@@ -3,7 +3,7 @@ use super::token_store::{TokenSet, TokenStore};
 use super::{CollectOptions, CollectionMode, PluginCandidate, normalize_response};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion, Tool};
+use rmcp::model::{CallToolRequestParams, ClientConfig, ProtocolVersion, Tool};
 use rmcp::transport::{
     StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
 };
@@ -216,14 +216,14 @@ impl XRemoteMcp {
     async fn connect(
         &self,
         token: &TokenSet,
-    ) -> Result<rmcp::service::RunningService<RoleClient, ClientInfo>, RemoteFailure> {
+    ) -> Result<rmcp::service::RunningService<RoleClient, ClientConfig>, RemoteFailure> {
         let mut config =
             StreamableHttpClientTransportConfig::with_uri(self.mcp_url.as_str().to_string())
                 .auth_header(token.access_token.clone());
         config.allow_stateless = true;
         config.reinit_on_expired_session = true;
         let transport = StreamableHttpClientTransport::from_config(config);
-        ClientInfo::default()
+        ClientConfig::default()
             .with_protocol_version(ProtocolVersion::V_2025_06_18)
             .serve(transport)
             .await

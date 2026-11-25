@@ -4,7 +4,7 @@ set -e
 echo "[devcontainer] Installing additional tools..."
 
 # go-task
-TASK_VERSION="3.40.1"
+TASK_VERSION="3.54.0"
 curl -sSL "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" \
   | sudo tar -xz -C /usr/local/bin task
 

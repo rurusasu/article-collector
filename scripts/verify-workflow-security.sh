@@ -2,10 +2,10 @@
 # Validate GitHub Actions hardening decisions that protect release automation.
 set -euo pipefail
 
-CHECKOUT_REF="9f698171ed81b15d1823a05fc7211befd50c8ae0"          # actions/checkout v6.0.3
-CACHE_REF="27d5ce7f107fe9357f9df03efb73ab90386fccae"             # actions/cache v5.0.5
-APP_TOKEN_REF="bcd2ba49218906704ab6c1aa796996da409d3eb1"         # actions/create-github-app-token v3.2.0
-RELEASE_PLZ_REF="e8792575c7f2366cf6ff3ccc33ead9ace5b691c7"       # release-plz/action v0.5.130
+CHECKOUT_REF="3d3c42e5aac5ba805825da76410c181273ba90b1"          # actions/checkout v7.0.1
+CACHE_REF="55cc8345863c7cc4c66a329aec7e433d2d1c52a9"             # actions/cache v6.1.0
+APP_TOKEN_REF="bcd2ba49218906704ab6c1aa796996da409d3eb1"         # actions/create-github-app-token v3.4.0
+RELEASE_PLZ_REF="66b324fd6c72d05d2a08568492ecdd62bfb8a62b"       # release-plz/action v0.5.148
 
 failures=0
 
