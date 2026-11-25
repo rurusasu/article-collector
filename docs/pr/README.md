@@ -64,7 +64,6 @@ Verify **all** items listed in the PR description's `Test plan` **locally on the
 #### 自動検証（必須）
 
 ```bash
-# 1. verify-pr を実行（必須 — これを実行しないと PR 更新がブロックされる）
 task verify-pr PR_NUMBER=<number>
 ```
 
@@ -75,8 +74,7 @@ task verify-pr PR_NUMBER=<number>
 #### ルール
 
 - 各項目を実際にコマンド実行・動作確認して検証する（**目視や推測で通過させない**）
-- `verify-pr` の実行結果が `/tmp/verify-pr-result.json` に保存される
-- この結果が `pass` でないと `gh pr edit` / `gh api` による PR 更新が **hook でブロック**される
+- `verify-pr` の実行結果は `/tmp/verify-pr-result.json` に保存される。`status` が `pass` であることを確認する
 - If all items pass, **immediately** update the PR description (check the boxes)
 - If any item fails, fix and re-verify
 - **検証と PR description の更新は必ずセットで行うこと。** 検証だけ行って更新を忘れると、PR の状態が実際の検証結果と乖離する
