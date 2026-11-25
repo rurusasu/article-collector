@@ -17,7 +17,7 @@ mod youtube;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(
@@ -142,37 +142,7 @@ async fn main() -> Result<()> {
             ref query,
             ref config,
         } => {
-            let app_config = config::load(config.as_deref())?;
-            let logger = logging::stderr_logger().new(slog::o!(
-                "command" => "recommend".to_string(),
-                "target" => target.clone(),
-            ));
-            let collection = recommend::collect_recommended_with_logger(
-                target,
-                limit,
-                query.as_deref(),
-                &app_config.recommend,
-                &logger,
-            )
-            .await?;
-            if collection.translation_required {
-                translate::translate(&collection.raw_path).await?;
-            }
-            if app_config.recommend.create_pr {
-                ensure_recommend_pr_has_articles(&collection)?;
-                let prepared = target_repos::prepare_article_branch()?;
-                let saved_articles = save::save_recommended_articles_to_target(
-                    &prepared.target_dir,
-                    &collection.translated_articles,
-                )?;
-                let saved_paths = saved_articles
-                    .iter()
-                    .map(|article| article.path.clone())
-                    .collect::<Vec<_>>();
-                let pr_title = recommend_pr_title(target, saved_articles.len());
-                let pr_body = recommend_pr_body(&saved_articles);
-                target_repos::create_pr_for_paths(&saved_paths, &pr_title, &pr_title, &pr_body)?;
-            }
+            run_recommend(target, limit, query.as_deref(), config.as_deref()).await?;
         }
         Commands::History {
             command: HistoryCommands::Clear { scope, ref config },
@@ -213,6 +183,46 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+async fn run_recommend(
+    target: &str,
+    limit: Option<usize>,
+    query: Option<&str>,
+    config_path: Option<&Path>,
+) -> Result<()> {
+    let app_config = config::load(config_path)?;
+    let logger = logging::stderr_logger().new(slog::o!(
+        "command" => "recommend".to_string(),
+        "target" => target.to_owned(),
+    ));
+    let collection = recommend::collect_recommended_with_logger(
+        target,
+        limit,
+        query,
+        &app_config.recommend,
+        &logger,
+    )
+    .await?;
+    if collection.translation_required {
+        translate::translate(&collection.raw_path).await?;
+    }
+    if app_config.recommend.create_pr {
+        ensure_recommend_pr_has_articles(&collection)?;
+        let prepared = target_repos::prepare_article_branch()?;
+        let saved_articles = save::save_recommended_articles_to_target(
+            &prepared.target_dir,
+            &collection.translated_articles,
+        )?;
+        let saved_paths = saved_articles
+            .iter()
+            .map(|article| article.path.clone())
+            .collect::<Vec<_>>();
+        let pr_title = recommend_pr_title(target, saved_articles.len());
+        let pr_body = recommend_pr_body(&saved_articles);
+        target_repos::create_pr_for_paths(&saved_paths, &pr_title, &pr_title, &pr_body)?;
+    }
     Ok(())
 }
 
