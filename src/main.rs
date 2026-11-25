@@ -208,7 +208,10 @@ async fn main() -> Result<()> {
         Commands::Plugin { ref command } => {
             let context = plugins::commands::production_context()?;
             for line in plugins::commands::execute(&context, command).await? {
-                eprintln!("{line}");
+                match command {
+                    plugins::commands::PluginCommands::List => println!("{line}"),
+                    _ => eprintln!("{line}"),
+                }
             }
         }
     }
