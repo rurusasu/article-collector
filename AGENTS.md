@@ -35,7 +35,7 @@ PR レビューの Step 3（チェックリスト検証）では、以下のプ�
 
 - 「目視確認した」「コード上問題ない」等の自己判断による検証スキップは**禁止**
 - verify-pr を実行せずにチェックボックスを更新することは**禁止**
-- `/tmp/verify-pr-result.json` が `pass` でない状態での PR body 更新は hook によりブロックされる
+- `/tmp/verify-pr-result.json` の `status` が `pass` であることを確認してから PR 本文のチェックボックスを更新する
 
 ### 検証ルールの追加
 
@@ -48,15 +48,12 @@ VERIFY_RULES+=(
 )
 ```
 
-## CI 自動監視
+## CI の確認
 
-`git push` 後に PostToolUse hook が `scripts/wait-ci.sh` を自動実行し、CI 完了まで待機する（最大5分）。
+PR の作成または更新後に `gh pr checks <PR_NUMBER> --watch` で GitHub Actions の完了まで待機する。
 
-- CI pass → PR レビュープロセスに進む
-- CI fail → 失敗ログが自動的にコンテキストに注入される。**CI failure は即座に修正すること**
-- タイムアウト → `gh pr checks <PR_NUMBER> --watch` で手動監視
-
-この仕組みは hook により自動実行されるため、手動での CI 確認は不要。
+- CI が成功したら [PR レビュープロセス](docs/pr/README.md) に進む。
+- CI が失敗したら `gh run view <RUN_ID> --log-failed` で原因を確認し、修正を push して再確認する。
 
 ## コーディング規約
 
