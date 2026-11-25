@@ -18,10 +18,16 @@ cargo fetch
 # Symlinking causes VS Code's credential helper injection to modify the repo file directly.
 # Using [include] keeps the repo file read-only while still applying its settings.
 REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
-git config --global include.path "${REPO_ROOT}/.github/.gitconfig"
+git_include="${REPO_ROOT}/.config/git/config"
+old_git_include="${REPO_ROOT}/.github/.gitconfig"
+if ! git config --global --fixed-value --get-all include.path "$git_include" >/dev/null; then
+  git config --global --fixed-value --replace-all include.path "$git_include" "$old_git_include"
+elif git config --global --fixed-value --get-all include.path "$old_git_include" >/dev/null; then
+  git config --global --fixed-value --unset-all include.path "$old_git_include"
+fi
 
 # Git hooks: use project hooks for commit-msg validation (repo-local only)
-git -C "${REPO_ROOT}" config core.hooksPath "${REPO_ROOT}/.githooks"
+git -C "${REPO_ROOT}" config --local core.hooksPath .config/git/hooks
 
 echo ""
 echo "[devcontainer] Run the following to complete git setup:"
