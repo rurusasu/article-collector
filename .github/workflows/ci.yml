@@ -42,9 +42,7 @@ jobs:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
-          rustup default stable
+        run: rustup toolchain install --no-self-update
 
       - name: Cache cargo registry & build
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -75,9 +73,7 @@ jobs:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        run: rustup toolchain install --no-self-update
 
       - name: Validate registry schema and signature fixtures
         run: |
@@ -91,9 +87,7 @@ jobs:
       - uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
 
       - name: Install Rust toolchain
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        run: rustup toolchain install --no-self-update
 
       - name: Install Taplo
         run: cargo install taplo-cli --version 0.10.0 --locked

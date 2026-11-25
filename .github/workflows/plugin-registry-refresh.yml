@@ -23,10 +23,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        shell: bash
-        run: |
-          rustup toolchain install stable --profile minimal
-          rustup default stable
+        run: rustup toolchain install --no-self-update
 
       - name: Create registry release token
         id: registry-token
