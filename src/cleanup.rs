@@ -11,16 +11,16 @@ pub struct ArtifactCleanupSummary {
 pub fn clear_all_artifacts() -> Result<ArtifactCleanupSummary> {
     let mut summary = ArtifactCleanupSummary::default();
 
-    if let Some(path) = paths::temp_dir_from_env() {
-        if remove_env_dir_if_exists(&path, paths::TEMP_DIR_ENV)? {
-            summary.removed_temp_dir = Some(path);
-        }
+    if let Some(path) = paths::temp_dir_from_env()
+        && remove_env_dir_if_exists(&path, paths::TEMP_DIR_ENV)?
+    {
+        summary.removed_temp_dir = Some(path);
     }
 
-    if let Some(path) = paths::output_dir() {
-        if remove_env_dir_if_exists(&path, paths::OUTPUT_DIR_ENV)? {
-            summary.removed_output_dir = Some(path);
-        }
+    if let Some(path) = paths::output_dir()
+        && remove_env_dir_if_exists(&path, paths::OUTPUT_DIR_ENV)?
+    {
+        summary.removed_output_dir = Some(path);
     }
 
     Ok(summary)

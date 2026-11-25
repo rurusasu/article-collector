@@ -23,7 +23,14 @@ pub fn target_dir_from_env() -> PathBuf {
 
 pub fn prepare_article_branch() -> Result<PreparedTargetRepo> {
     let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
-    let target_dir = target_dir_from_env();
+    prepare_article_branch_at(&target_repo, target_dir_from_env(), &gh_program())
+}
+
+fn prepare_article_branch_at(
+    target_repo: &str,
+    target_dir: PathBuf,
+    gh: &str,
+) -> Result<PreparedTargetRepo> {
     let branch = article_branch_name();
 
     if is_valid_target_repo(&target_dir) {
@@ -33,7 +40,7 @@ pub fn prepare_article_branch() -> Result<PreparedTargetRepo> {
         if target_dir.exists() {
             quarantine_invalid_target_dir(&target_dir)?;
         }
-        clone_target_repo(&target_repo, &target_dir)?;
+        clone_target_repo(target_repo, &target_dir, gh)?;
     }
 
     run_git(&target_dir, &["checkout", "-b", &branch])?;
@@ -174,7 +181,7 @@ fn is_valid_target_repo(target_dir: &Path) -> bool {
     .is_ok()
 }
 
-fn clone_target_repo(target_repo: &str, target_dir: &Path) -> Result<()> {
+fn clone_target_repo(target_repo: &str, target_dir: &Path, gh: &str) -> Result<()> {
     let parent = target_dir.parent().with_context(|| {
         format!(
             "Target repo path {} does not have a parent directory",
@@ -190,9 +197,8 @@ fn clone_target_repo(target_repo: &str, target_dir: &Path) -> Result<()> {
 
     let staging_dir = clone_staging_path(target_dir);
     let staging_dir_arg = staging_dir.to_string_lossy().to_string();
-    let gh = gh_program();
     let clone_result = run_cmd(
-        &gh,
+        gh,
         &["repo", "clone", target_repo, staging_dir_arg.as_str()],
     );
     if let Err(error) = clone_result {
@@ -288,11 +294,7 @@ fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
 }
 
 fn run_git(dir: &Path, args: &[&str]) -> Result<()> {
-    run_git_with_timeout(dir, args, command_timeout())
-}
-
-fn run_git_with_timeout(dir: &Path, args: &[&str], timeout: Duration) -> Result<()> {
-    run_cmd_in_with_timeout(dir, &git_program(), args, timeout)
+    run_cmd_in_with_timeout(dir, &git_program(), args, command_timeout())
 }
 
 fn run_git_owned(dir: &Path, args: &[String]) -> Result<()> {
@@ -454,26 +456,33 @@ fn commit_push_and_create_pr(
 }
 
 fn push_branch(target_dir: &Path, branch: &str) -> Result<()> {
-    push_branch_with_timeout(target_dir, branch, command_timeout())
+    push_branch_with_timeout(target_dir, branch, command_timeout(), &git_program())
 }
 
-fn push_branch_with_timeout(target_dir: &Path, branch: &str, timeout: Duration) -> Result<()> {
-    let result = run_git_with_timeout(target_dir, &["push", "-u", "origin", branch], timeout);
+fn push_branch_with_timeout(
+    target_dir: &Path,
+    branch: &str,
+    timeout: Duration,
+    git: &str,
+) -> Result<()> {
+    let result =
+        run_cmd_in_with_timeout(target_dir, git, &["push", "-u", "origin", branch], timeout);
     if result.is_ok() {
         return Ok(());
     }
 
     let error = result.unwrap_err();
-    if is_timeout_error(&error) && remote_branch_exists(target_dir, branch) {
+    if is_timeout_error(&error) && remote_branch_exists(target_dir, branch, git) {
         return Ok(());
     }
 
     Err(error)
 }
 
-fn remote_branch_exists(target_dir: &Path, branch: &str) -> bool {
-    run_git_with_timeout(
+fn remote_branch_exists(target_dir: &Path, branch: &str, git: &str) -> bool {
+    run_cmd_in_with_timeout(
         target_dir,
+        git,
         &["ls-remote", "--exit-code", "--heads", "origin", branch],
         health_check_timeout(),
     )
@@ -496,10 +505,7 @@ fn git_program() -> String {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
     use std::time::Duration;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn resolves_relative_path_under_target_dir() {
@@ -642,7 +648,6 @@ mod tests {
 
     #[test]
     fn failed_clone_cleans_staging_dir_and_quarantines_invalid_target() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let sandbox = normalized_temp_path("target-repo-failed-clone");
         let target_dir = sandbox.join("target-repo");
         let bin_dir = sandbox.join("bin");
@@ -651,14 +656,12 @@ mod tests {
         fs::create_dir_all(&bin_dir).unwrap();
         let fake_gh = write_fake_gh_clone_failure(&bin_dir);
 
-        let previous_path = std::env::var_os("PATH");
-        let previous_gh_bin = std::env::var_os(GH_BIN_ENV);
-        std::env::set_var("PATH", prepend_path(&bin_dir, previous_path.as_ref()));
-        std::env::set_var(GH_BIN_ENV, &fake_gh);
-        std::env::set_var("TARGET_REPO", "rurusasu/lifelog");
-        std::env::set_var("TARGET_DIR", &target_dir);
-
-        let error = prepare_article_branch().unwrap_err();
+        let error = prepare_article_branch_at(
+            "rurusasu/lifelog",
+            target_dir.clone(),
+            &fake_gh.to_string_lossy(),
+        )
+        .unwrap_err();
 
         assert!(
             error.to_string().contains("gh repo clone"),
@@ -679,14 +682,10 @@ mod tests {
             "broken target dir should be quarantined, entries: {entries:?}"
         );
         assert!(
-            entries.iter().all(|name| !name.contains(".clone-")),
+            entries.iter().all(|name| !name.starts_with(".c")),
             "failed clone staging dirs should be cleaned up, entries: {entries:?}"
         );
 
-        restore_env("PATH", previous_path);
-        restore_env(GH_BIN_ENV, previous_gh_bin);
-        std::env::remove_var("TARGET_REPO");
-        std::env::remove_var("TARGET_DIR");
         let _ = fs::remove_dir_all(sandbox);
     }
 
@@ -711,7 +710,6 @@ mod tests {
 
     #[test]
     fn push_timeout_is_recovered_when_remote_branch_exists() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let sandbox = normalized_temp_path("target-repo-push-timeout-recovered");
         let target_dir = sandbox.join("target-repo");
         let bin_dir = sandbox.join("bin");
@@ -720,24 +718,23 @@ mod tests {
         fs::create_dir_all(&bin_dir).unwrap();
         let fake_git = write_fake_git_push_timeout(&bin_dir);
 
-        let previous_git_bin = std::env::var_os(GIT_BIN_ENV);
-        std::env::set_var(GIT_BIN_ENV, &fake_git);
-
-        let result =
-            push_branch_with_timeout(&target_dir, "article/recovered", Duration::from_millis(50));
+        let result = push_branch_with_timeout(
+            &target_dir,
+            "article/recovered",
+            Duration::from_millis(50),
+            &fake_git.to_string_lossy(),
+        );
 
         assert!(
             result.is_ok(),
             "push timeout should be recovered: {result:#?}"
         );
 
-        restore_env(GIT_BIN_ENV, previous_git_bin);
         let _ = fs::remove_dir_all(sandbox);
     }
 
     #[test]
     fn push_timeout_remains_error_when_remote_branch_is_missing() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let sandbox = normalized_temp_path("target-repo-push-timeout-missing");
         let target_dir = sandbox.join("target-repo");
         let bin_dir = sandbox.join("bin");
@@ -746,12 +743,13 @@ mod tests {
         fs::create_dir_all(&bin_dir).unwrap();
         let fake_git = write_fake_git_push_timeout(&bin_dir);
 
-        let previous_git_bin = std::env::var_os(GIT_BIN_ENV);
-        std::env::set_var(GIT_BIN_ENV, &fake_git);
-
-        let error =
-            push_branch_with_timeout(&target_dir, "article/missing", Duration::from_millis(50))
-                .unwrap_err();
+        let error = push_branch_with_timeout(
+            &target_dir,
+            "article/missing",
+            Duration::from_millis(50),
+            &fake_git.to_string_lossy(),
+        )
+        .unwrap_err();
 
         assert!(
             error
@@ -760,7 +758,6 @@ mod tests {
             "unexpected error: {error:#}"
         );
 
-        restore_env(GIT_BIN_ENV, previous_git_bin);
         let _ = fs::remove_dir_all(sandbox);
     }
 
@@ -837,24 +834,6 @@ mod tests {
                 fs::set_permissions(&path, permissions).unwrap();
             }
             path
-        }
-    }
-
-    fn prepend_path(
-        bin_dir: &Path,
-        previous_path: Option<&std::ffi::OsString>,
-    ) -> std::ffi::OsString {
-        let mut paths = vec![bin_dir.to_path_buf()];
-        if let Some(previous_path) = previous_path {
-            paths.extend(std::env::split_paths(previous_path));
-        }
-        std::env::join_paths(paths).unwrap()
-    }
-
-    fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
-        match value {
-            Some(value) => std::env::set_var(name, value),
-            None => std::env::remove_var(name),
         }
     }
 }

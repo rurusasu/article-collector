@@ -2088,10 +2088,10 @@ fn handle_arxiv_empty_like_element(
         "link" => {
             let href = xml_attr_value(element, b"href")?;
             let rel = xml_attr_value(element, b"rel")?;
-            if rel.as_deref().unwrap_or("alternate") == "alternate" {
-                if let Some(href) = href {
-                    entry.url = normalize_arxiv_url(&href);
-                }
+            if rel.as_deref().unwrap_or("alternate") == "alternate"
+                && let Some(href) = href
+            {
+                entry.url = normalize_arxiv_url(&href);
             }
         }
         "category" => {
