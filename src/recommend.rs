@@ -1,10 +1,10 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use quick_xml::events::{BytesRef, BytesStart, Event};
 use quick_xml::reader::Reader;
 use reqwest::Url;
 use scraper::{Html, Selector};
-use serde_json::{json, Value};
-use slog::{info, warn, Logger};
+use serde_json::{Value, json};
+use slog::{Logger, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::future::Future;
@@ -17,13 +17,13 @@ use crate::fetch;
 use crate::paths;
 use crate::pipeline::{
     artifacts as recommend_artifacts,
-    history::{default_history_path, RecommendationHistory},
+    history::{RecommendationHistory, default_history_path},
     translation as translate,
 };
 use crate::plugins::paths::PluginPaths;
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::sources::{
-    collect_plugin_source, PluginSource, PluginSourceCatalog, PluginSourceCollector,
+    PluginSource, PluginSourceCatalog, PluginSourceCollector, collect_plugin_source,
 };
 use crate::plugins::state::InstalledPluginStore;
 use crate::sites::{
@@ -1517,7 +1517,9 @@ fn nvd_cve_to_recommendation(cve: &Value) -> Option<Value> {
     let url = format!("https://nvd.nist.gov/vuln/detail/{cve_id}");
     let content = format!(
         "Title: {title}\nURL: {url}\nSeverity: {severity}\nCVSS score: {}\nPublished: {published_at}\nUpdated: {updated_at}\nDescription: {description}",
-        cvss_score.map(|score| score.to_string()).unwrap_or_default()
+        cvss_score
+            .map(|score| score.to_string())
+            .unwrap_or_default()
     );
 
     Some(json!({
@@ -2936,8 +2938,8 @@ mod tests {
     use std::collections::{BTreeMap, HashSet};
     use std::path::PathBuf;
     use std::sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
     use std::time::Duration;
 
@@ -3142,9 +3144,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("No new recommended articles found"));
+        assert!(
+            error
+                .to_string()
+                .contains("No new recommended articles found")
+        );
     }
 
     /// 検証: all の明示順序・plugin 無効化と既定の plugin ソート順を保つ
@@ -3195,15 +3199,17 @@ mod tests {
     fn rejects_backend_specific_unsupported_configuration() {
         let (_temp, catalog) = plugin_catalog(&[("example", &[])]);
         let config = RecommendConfig::default();
-        assert!(source_plan_for_plugin(
-            catalog.resolve("example").unwrap(),
-            None,
-            Some("rust"),
-            &config
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("--query"));
+        assert!(
+            source_plan_for_plugin(
+                catalog.resolve("example").unwrap(),
+                None,
+                Some("rust"),
+                &config
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("--query")
+        );
 
         let mut config = RecommendConfig::default();
         config.source.insert(
@@ -3213,10 +3219,12 @@ mod tests {
                 ..RecommendSiteConfig::default()
             },
         );
-        assert!(source_plans_for_all(None, &config, &catalog)
-            .unwrap_err()
-            .to_string()
-            .contains("options"));
+        assert!(
+            source_plans_for_all(None, &config, &catalog)
+                .unwrap_err()
+                .to_string()
+                .contains("options")
+        );
     }
 
     /// 検証: plugin の明示失敗はエラー、all 中の失敗は他 source の成功を残す
@@ -4311,14 +4319,18 @@ mod tests {
         assert_eq!(recommendation["severity"], "high");
         assert_eq!(recommendation["ghsa_id"], "GHSA-abcd-1234");
         assert_eq!(recommendation["cve_id"], "CVE-2026-0001");
-        assert!(recommendation["content"]
-            .as_str()
-            .unwrap()
-            .contains("Severity: high"));
-        assert!(recommendation["content"]
-            .as_str()
-            .unwrap()
-            .contains("CVE: CVE-2026-0001"));
+        assert!(
+            recommendation["content"]
+                .as_str()
+                .unwrap()
+                .contains("Severity: high")
+        );
+        assert!(
+            recommendation["content"]
+                .as_str()
+                .unwrap()
+                .contains("CVE: CVE-2026-0001")
+        );
     }
 
     #[test]
@@ -4363,10 +4375,12 @@ mod tests {
         assert_eq!(items[0]["date_added"], "2026-06-02");
         assert_eq!(items[0]["due_date"], "2026-06-22");
         assert_ne!(items[0]["url"], items[1]["url"]);
-        assert!(items[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Required action: Mitigate"));
+        assert!(
+            items[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Required action: Mitigate")
+        );
     }
 
     #[test]
@@ -4424,10 +4438,12 @@ mod tests {
         );
         assert_eq!(items[0]["severity"], "CRITICAL");
         assert_eq!(items[0]["cvss_score"], 9.8);
-        assert!(items[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("English vulnerability description"));
+        assert!(
+            items[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("English vulnerability description")
+        );
     }
 
     #[test]
@@ -4543,10 +4559,12 @@ mod tests {
         assert_eq!(recommendation["url"], "https://github.com/example/tool");
         assert_eq!(recommendation["stars"], 1234);
         assert_eq!(recommendation["language"], "Rust");
-        assert!(recommendation["content"]
-            .as_str()
-            .unwrap()
-            .contains("Pushed: 2026-06-23T00:00:00Z"));
+        assert!(
+            recommendation["content"]
+                .as_str()
+                .unwrap()
+                .contains("Pushed: 2026-06-23T00:00:00Z")
+        );
     }
 
     /// 検証: 空の query override は arXiv 既定 query に戻す
@@ -4663,9 +4681,11 @@ mod tests {
             assert!(request.contains("page=1"));
             assert!(request.contains("per_page=3"));
             assert!(request.contains("query=Rust"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("user-agent: article-collector/"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("user-agent: article-collector/")
+            );
             let reason = if status == 200 {
                 "OK"
             } else {
@@ -4695,9 +4715,11 @@ mod tests {
             assert!(request.contains("q=atproto"));
             assert!(request.contains("limit=4"));
             assert!(request.contains("sort=latest"));
-            assert!(request
-                .to_ascii_lowercase()
-                .contains("user-agent: article-collector/"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("user-agent: article-collector/")
+            );
             let reason = if status == 200 {
                 "OK"
             } else {
@@ -4768,9 +4790,10 @@ mod tests {
             );
         }
 
-        assert!(items.iter().all(|item| item
-            .get("url")
-            .and_then(Value::as_str)
-            .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))));
+        assert!(items.iter().all(|item| {
+            item.get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
+        }));
     }
 }

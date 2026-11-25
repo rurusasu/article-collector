@@ -1,7 +1,7 @@
-use crate::plugins::registry::{download_http_client, ResolvedPlugin};
+use crate::plugins::registry::{ResolvedPlugin, download_http_client};
 use crate::plugins::state::InstalledPluginStore;
 use crate::plugins::types::{InstalledPlugin, PluginDescriptor, PluginManifest, RegistryArtifact};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use futures::StreamExt;
 use semver::Version;

@@ -1,10 +1,10 @@
 use crate::plugins::installer::{InstallOutcome, PluginInstaller, PluginProbe};
-use crate::plugins::paths::{current_plugin_target, validate_plugin_name, PluginPaths};
-use crate::plugins::registry::{resolve_plugin, RegistryClient};
+use crate::plugins::paths::{PluginPaths, current_plugin_target, validate_plugin_name};
+use crate::plugins::registry::{RegistryClient, resolve_plugin};
 use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::state::InstalledPluginStore;
 use crate::plugins::types::{InstalledPlugin, PluginDescriptor, RegistryIndex};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::Subcommand;
@@ -369,7 +369,7 @@ impl RegistryRevisionStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
                 return Err(error)
-                    .with_context(|| format!("Failed to read registry state {}", path.display()))
+                    .with_context(|| format!("Failed to read registry state {}", path.display()));
             }
         };
         let state: RegistryRevisionState = serde_json::from_slice(&bytes)

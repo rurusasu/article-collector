@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use regex::Regex;
 use serde_json::Value;
 use std::fs;
@@ -132,10 +132,12 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["title"], "Example");
         assert_eq!(items[0]["url"], url);
-        assert!(items[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Hello article"));
+        assert!(
+            items[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Hello article")
+        );
     }
 
     #[tokio::test]

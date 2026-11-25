@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -379,8 +379,11 @@ mod tests {
 
         let index = fs::read_to_string(outdir.join("translated.md")).unwrap();
         assert!(index.contains("# Recommended Articles"));
-        assert!(index
-            .contains("Generated from `recommend all` with `[recommend].fetch_articles = true`."));
+        assert!(
+            index.contains(
+                "Generated from `recommend all` with `[recommend].fetch_articles = true`."
+            )
+        );
         assert!(index.contains("1. Example Article"));
         assert!(index.contains(
             "Translation: recommended_articles/001-hackernews-example-article_translated.md"
@@ -426,8 +429,11 @@ mod tests {
         assert!(index.contains(
             "   Summary: これは推薦記事の翻訳済み本文です。Slack に貼るための短い抜粋として使います。"
         ));
-        assert!(index
-            .contains("   Translation: recommended_articles/001-hackernews-example_translated.md"));
+        assert!(
+            index.contains(
+                "   Translation: recommended_articles/001-hackernews-example_translated.md"
+            )
+        );
     }
 
     #[test]

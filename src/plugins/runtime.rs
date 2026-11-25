@@ -1,13 +1,13 @@
-use crate::plugins::installer::{validate_descriptor, PluginProbe};
+use crate::plugins::installer::{PluginProbe, validate_descriptor};
 use crate::plugins::types::{
     CollectRequest, CollectResponse, InstalledPlugin, PluginCandidate, PluginDescriptor,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use command_group::{AsyncCommandGroup, AsyncGroupChild};
 use futures::{SinkExt, StreamExt};
 use rmcp::transport::async_rw::JsonRpcMessageCodec;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -506,7 +506,7 @@ mod tests {
     };
     use rmcp::transport::async_rw::JsonRpcMessageCodec;
     use semver::{Version, VersionReq};
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     use tokio_util::bytes::BytesMut;
     use tokio_util::codec::Decoder;
     use url::Url;
@@ -530,9 +530,11 @@ mod tests {
             item.metadata.insert(field.to_string(), json!("spoofed"));
             let error =
                 validate_collect_response(1, &CollectResponse { items: vec![item] }).unwrap_err();
-            assert!(error
-                .to_string()
-                .contains(&format!("reserved metadata field '{field}'")));
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("reserved metadata field '{field}'"))
+            );
         }
     }
 
@@ -544,46 +546,54 @@ mod tests {
         let too_many = CollectResponse {
             items: vec![candidate(), candidate()],
         };
-        assert!(validate_collect_response(1, &too_many)
-            .unwrap_err()
-            .to_string()
-            .contains("more items"));
+        assert!(
+            validate_collect_response(1, &too_many)
+                .unwrap_err()
+                .to_string()
+                .contains("more items")
+        );
 
         let mut invalid_url = candidate();
         invalid_url.url = Url::parse("ftp://example.com/file").unwrap();
-        assert!(validate_collect_response(
-            1,
-            &CollectResponse {
-                items: vec![invalid_url]
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("HTTP"));
+        assert!(
+            validate_collect_response(
+                1,
+                &CollectResponse {
+                    items: vec![invalid_url]
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("HTTP")
+        );
 
         let mut long_title = candidate();
         long_title.title = "t".repeat(8 * 1024 + 1);
-        assert!(validate_collect_response(
-            1,
-            &CollectResponse {
-                items: vec![long_title]
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("title"));
+        assert!(
+            validate_collect_response(
+                1,
+                &CollectResponse {
+                    items: vec![long_title]
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("title")
+        );
 
         let mut long_content = candidate();
         long_content.content = "c".repeat(1024 * 1024 + 1);
-        assert!(validate_collect_response(
-            1,
-            &CollectResponse {
-                items: vec![long_content]
-            }
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("content"));
+        assert!(
+            validate_collect_response(
+                1,
+                &CollectResponse {
+                    items: vec![long_content]
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("content")
+        );
     }
 
     /// 検証: MCP codecは16MiBを超えるnewlineなしframeを拒否する

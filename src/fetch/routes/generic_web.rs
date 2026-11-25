@@ -1,6 +1,6 @@
 use anyhow::Result;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub async fn fetch_items(url: &str) -> Result<Vec<Value>> {
     eprintln!("Routing: {url} -> generic web fetch");

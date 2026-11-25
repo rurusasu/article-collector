@@ -1,6 +1,6 @@
 use super::token_store::TokenSet;
-use anyhow::{bail, Context, Result};
-use base64::prelude::{Engine as _, BASE64_URL_SAFE_NO_PAD};
+use anyhow::{Context, Result, bail};
+use base64::prelude::{BASE64_URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, Utc};
 use rand::RngCore;
 use reqwest::StatusCode;

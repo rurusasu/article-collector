@@ -2,9 +2,9 @@ use crate::plugins::runtime::PluginRuntime;
 use crate::plugins::state::InstalledPluginStore;
 use crate::plugins::types::{CollectRequest, InstalledPlugin, ManifestSource, PluginCandidate};
 use crate::sites;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
@@ -325,11 +325,13 @@ mod tests {
         );
 
         let invalid: toml::Table = toml::from_str("mode = \"unknown\"").unwrap();
-        assert!(source
-            .validate_options(Some(&invalid))
-            .unwrap_err()
-            .to_string()
-            .contains("options"));
+        assert!(
+            source
+                .validate_options(Some(&invalid))
+                .unwrap_err()
+                .to_string()
+                .contains("options")
+        );
     }
 
     /// 検証: plugin metadataを保ちつつsource/site/rankはcoreが設定する

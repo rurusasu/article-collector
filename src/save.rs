@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Local;
 use regex::Regex;
 use serde_json::Value;
@@ -482,9 +482,11 @@ mod tests {
             std::path::PathBuf::from("articles/web/2026-06-23_example-article.md")
         );
         assert!(saved.path.exists());
-        assert!(std::fs::read_to_string(saved.path)
-            .unwrap()
-            .contains("Translated body"));
+        assert!(
+            std::fs::read_to_string(saved.path)
+                .unwrap()
+                .contains("Translated body")
+        );
     }
 
     #[test]
@@ -531,12 +533,16 @@ mod tests {
             saved[1].repo_relative_path,
             PathBuf::from("articles/paper/2026-06-24_second-recommended-article.md")
         );
-        assert!(std::fs::read_to_string(&saved[0].path)
-            .unwrap()
-            .contains("First translated body"));
-        assert!(std::fs::read_to_string(&saved[1].path)
-            .unwrap()
-            .contains("Second translated body"));
+        assert!(
+            std::fs::read_to_string(&saved[0].path)
+                .unwrap()
+                .contains("First translated body")
+        );
+        assert!(
+            std::fs::read_to_string(&saved[1].path)
+                .unwrap()
+                .contains("Second translated body")
+        );
     }
 
     #[test]
@@ -582,12 +588,16 @@ mod tests {
             saved[1].repo_relative_path,
             PathBuf::from("articles/web/2026-06-24_same-title-2.md")
         );
-        assert!(std::fs::read_to_string(&saved[0].path)
-            .unwrap()
-            .contains("First duplicate body"));
-        assert!(std::fs::read_to_string(&saved[1].path)
-            .unwrap()
-            .contains("Second duplicate body"));
+        assert!(
+            std::fs::read_to_string(&saved[0].path)
+                .unwrap()
+                .contains("First duplicate body")
+        );
+        assert!(
+            std::fs::read_to_string(&saved[1].path)
+                .unwrap()
+                .contains("Second duplicate body")
+        );
     }
 
     #[test]

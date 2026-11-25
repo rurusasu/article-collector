@@ -5,8 +5,8 @@ pub mod stdio;
 pub mod token_store;
 pub use normalize::normalize_response;
 
-use anyhow::{bail, Result};
-use serde_json::{json, Map, Value};
+use anyhow::{Result, bail};
+use serde_json::{Map, Value, json};
 use url::Url;
 
 pub const PLUGIN_NAME: &str = "x";

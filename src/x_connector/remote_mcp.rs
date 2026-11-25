@@ -1,14 +1,14 @@
 use super::oauth::OAuthClient;
 use super::token_store::{TokenSet, TokenStore};
-use super::{normalize_response, CollectOptions, CollectionMode, PluginCandidate};
-use anyhow::{bail, Context, Result};
+use super::{CollectOptions, CollectionMode, PluginCandidate, normalize_response};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use rmcp::model::{CallToolRequestParams, ClientInfo, ProtocolVersion, Tool};
 use rmcp::transport::{
-    streamable_http_client::StreamableHttpClientTransportConfig, StreamableHttpClientTransport,
+    StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
 };
 use rmcp::{RoleClient, ServiceError, ServiceExt};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashSet;
 use url::Url;
 

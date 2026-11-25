@@ -24,8 +24,8 @@ pub mod youtube;
 pub mod zenn;
 
 pub use registry::{
-    discovery_endpoint_for_url, fetch_route_for_url, recommendable_site_names, recommendable_sites,
-    save_type_for_url, site_by_name, site_for_url, supported_url_examples, SITES,
+    SITES, discovery_endpoint_for_url, fetch_route_for_url, recommendable_site_names,
+    recommendable_sites, save_type_for_url, site_by_name, site_for_url, supported_url_examples,
 };
 pub use types::FetchRoute;
 
