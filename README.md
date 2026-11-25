@@ -558,8 +558,8 @@ SQLite 履歴だけを消して再収集したい場合は `article-collector hi
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
-taplo format --check Cargo.toml article-collector.toml release-plz.toml
-taplo lint Cargo.toml article-collector.toml release-plz.toml
+taplo format --check Cargo.toml article-collector.toml .config/release-plz.toml
+taplo lint Cargo.toml article-collector.toml .config/release-plz.toml
 cargo test --locked
 cargo build --release --locked
 ```

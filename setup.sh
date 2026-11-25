@@ -18,7 +18,7 @@ if ! command -v jq &>/dev/null; then
   apt-get update -qq && apt-get install -y -qq jq
 fi
 
-# shellcheck (shell script linter)
+# Install ShellCheck when it is missing.
 if ! command -v shellcheck &>/dev/null; then
   echo "[setup] installing shellcheck..."
   apt-get update -qq && apt-get install -y -qq shellcheck
@@ -33,7 +33,7 @@ if ! command -v task &>/dev/null; then
   if ! command -v task &>/dev/null; then
     apt-get update -qq && apt-get install -y -qq task-spooler 2>/dev/null || true
     # Fallback: download binary from GitHub releases directly
-    TASK_VERSION="3.40.1"
+    TASK_VERSION="3.54.0"
     curl -sSL "https://github.com/go-task/task/releases/download/v${TASK_VERSION}/task_linux_amd64.tar.gz" -o /tmp/task.tar.gz \
       && tar -xzf /tmp/task.tar.gz -C /usr/local/bin task \
       && rm /tmp/task.tar.gz \

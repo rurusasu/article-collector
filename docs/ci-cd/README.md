@@ -56,7 +56,7 @@ version bump を含む Release PR の merge、または未作成tagへの手動 
 release build と plugin registry publish が進む。
 5 target の build matrix がすべて成功すると、protected `plugin-registry` environment の publisher が署名済み official registry を公開する。build が失敗または skip された場合は publisher を実行しない。build 成功後も、現在の Cargo version tag が draft/prerelease を除く最新の published core release である場合だけ公開し、古い queued run は成功のまま refresh/sign と upload を skip する。
 
-`release-plz.toml` は `git_only = true` にしているため、Release PR の version 判定は crates.io ではなく git tag で行う。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v<major>.<minor>.<patch>` 形式を使う。
+`.config/release-plz.toml` の `git_only = true` により、Release PR の version 判定は git tag を参照する。workflow は `release-plz release` を実行せず、crates.io publish 経路を通らない。tag 名は release-plz の single-crate default に合わせ、`v<major>.<minor>.<patch>` 形式を使う。
 
 | Target | Core asset | Plugin asset |
 |--------|------------|--------------|
@@ -148,4 +148,4 @@ payload の意味的同一性を確認する。
 | `.github/workflows/release.yml` | Release PR 作成 + GitHub Release + asset build/upload + protected registry publish |
 | `.github/workflows/plugin-registry-refresh.yml` | 週次/手動の protected registry metadata refresh と再署名 |
 | `.github/workflows/pr-checklist.yml` | PR checklist 検証 |
-| `release-plz.toml` | release-plz の git-only release 設定 |
+| `.config/release-plz.toml` | release-plz の git-only release 設定 |
