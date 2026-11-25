@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -110,7 +110,7 @@ fn reject_symlink_if_present(path: &Path) -> Result<()> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("Failed to inspect plugin path {}", path.display()))
+                .with_context(|| format!("Failed to inspect plugin path {}", path.display()));
         }
     };
     if metadata.file_type().is_symlink() || is_windows_reparse_point(&metadata) {

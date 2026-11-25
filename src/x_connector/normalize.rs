@@ -1,5 +1,5 @@
-use super::{PluginCandidate, MAX_TITLE_CHARS};
-use anyhow::{bail, Context, Result};
+use super::{MAX_TITLE_CHARS, PluginCandidate};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use url::Url;

@@ -2,8 +2,8 @@ use crate::plugins::types::{
     PluginManifest, RegistryArtifact, RegistryIndex, RegistrySignatureSet, TrustedKey,
 };
 use crate::plugins::{PLUGIN_PROTOCOL_VERSION, REGISTRY_SCHEMA_VERSION};
-use anyhow::{bail, Context, Result};
-use base64::prelude::{Engine as _, BASE64_STANDARD};
+use anyhow::{Context, Result, bail};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures::StreamExt;
@@ -14,10 +14,8 @@ use url::Url;
 
 pub const MAX_REGISTRY_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SIGNATURE_BYTES: usize = 64 * 1024;
-pub const OFFICIAL_REGISTRY_INDEX_URL: &str =
-    "https://github.com/rurusasu/article-collector/releases/download/plugin-registry-v1/plugins-v1.json";
-pub const OFFICIAL_REGISTRY_SIGNATURE_URL: &str =
-    "https://github.com/rurusasu/article-collector/releases/download/plugin-registry-v1/plugins-v1.sig";
+pub const OFFICIAL_REGISTRY_INDEX_URL: &str = "https://github.com/rurusasu/article-collector/releases/download/plugin-registry-v1/plugins-v1.json";
+pub const OFFICIAL_REGISTRY_SIGNATURE_URL: &str = "https://github.com/rurusasu/article-collector/releases/download/plugin-registry-v1/plugins-v1.sig";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedPlugin {
@@ -374,7 +372,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use ed25519_dalek::{Signature, Signer, SigningKey};
     use semver::Version;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     struct SignedFixture {
         index_bytes: Vec<u8>,
@@ -503,16 +501,18 @@ mod tests {
             public_key: fixture.trusted_key.public_key.clone(),
             revoked: false,
         };
-        assert!(verify_registry(
-            &fixture.index_bytes,
-            &fixture.signature_bytes,
-            &[unknown],
-            utc("2026-07-26T12:00:00Z"),
-            None,
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("trusted signature"));
+        assert!(
+            verify_registry(
+                &fixture.index_bytes,
+                &fixture.signature_bytes,
+                &[unknown],
+                utc("2026-07-26T12:00:00Z"),
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("trusted signature")
+        );
     }
 
     #[test]
@@ -544,16 +544,18 @@ mod tests {
         let mut wrong_schema = registry(vec![version("1.0.0", ">=1.0.0, <2.0.0")]);
         wrong_schema["schema_version"] = json!(2);
         let fixture = signed_registry_fixture(wrong_schema);
-        assert!(verify_registry(
-            &fixture.index_bytes,
-            &fixture.signature_bytes,
-            &[fixture.trusted_key],
-            utc("2026-07-26T12:00:00Z"),
-            None,
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("schema"));
+        assert!(
+            verify_registry(
+                &fixture.index_bytes,
+                &fixture.signature_bytes,
+                &[fixture.trusted_key],
+                utc("2026-07-26T12:00:00Z"),
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("schema")
+        );
 
         let duplicate = signed_registry_fixture(json!({
             "schema_version": 1,
@@ -565,16 +567,18 @@ mod tests {
                 {"name": "example", "versions": [version("1.1.0", ">=1.0.0, <2.0.0")]}
             ]
         }));
-        assert!(verify_registry(
-            &duplicate.index_bytes,
-            &duplicate.signature_bytes,
-            &[duplicate.trusted_key],
-            utc("2026-07-26T12:00:00Z"),
-            None,
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("duplicate plugin"));
+        assert!(
+            verify_registry(
+                &duplicate.index_bytes,
+                &duplicate.signature_bytes,
+                &[duplicate.trusted_key],
+                utc("2026-07-26T12:00:00Z"),
+                None,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate plugin")
+        );
     }
 
     /// 検証:署名済みmanifest内の不正なoptions JSON Schemaをinstall前に拒否する
@@ -638,23 +642,27 @@ mod tests {
                 .to_string()
                 .contains("target")
         );
-        assert!(resolve_plugin(
-            &index,
-            "example",
-            Some(&Version::parse("2.0.0").unwrap()),
-            "aarch64-apple-darwin",
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("protocol"));
-        assert!(resolve_plugin(
-            &index,
-            "example",
-            Some(&Version::parse("9.0.0").unwrap()),
-            "aarch64-apple-darwin",
-        )
-        .unwrap_err()
-        .to_string()
-        .contains("version"));
+        assert!(
+            resolve_plugin(
+                &index,
+                "example",
+                Some(&Version::parse("2.0.0").unwrap()),
+                "aarch64-apple-darwin",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("protocol")
+        );
+        assert!(
+            resolve_plugin(
+                &index,
+                "example",
+                Some(&Version::parse("9.0.0").unwrap()),
+                "aarch64-apple-darwin",
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("version")
+        );
     }
 }

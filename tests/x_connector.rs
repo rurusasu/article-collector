@@ -1,20 +1,20 @@
 use anyhow::Context;
 use article_collector::x_connector::oauth::{
-    pkce_challenge, CallbackResult, OAuthClient, OAuthConfig,
+    CallbackResult, OAuthClient, OAuthConfig, pkce_challenge,
 };
 use article_collector::x_connector::remote_mcp::XRemoteMcp;
 use article_collector::x_connector::stdio::{OAuthConfigurator, StdioServer};
 use article_collector::x_connector::token_store::{TokenSet, TokenStore};
 use article_collector::x_connector::{
-    descriptor, normalize_response, parse_collect_options, CollectOptions, CollectionMode,
+    CollectOptions, CollectionMode, descriptor, normalize_response, parse_collect_options,
 };
 use chrono::{Duration, Utc};
-use serde_json::{json, Map, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 use url::Url;
 
 fn options(value: Value) -> Map<String, Value> {
@@ -476,10 +476,11 @@ async fn stdio_server_handles_protocol_tools_and_collect() -> anyhow::Result<()>
         .unwrap();
     assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
 
-    assert!(app
-        .handle_message(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
-        .await?
-        .is_none());
+    assert!(
+        app.handle_message(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+            .await?
+            .is_none()
+    );
 
     let tools = app
         .handle_message(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Local;
 use regex::Regex;
 use serde_json::Value;
@@ -45,7 +45,7 @@ pub fn save_article_to_target(target_root: &Path, url: &str) -> Result<SavedArti
         &save_path_template,
         &now,
     )?;
-    collect_final_markdown_if_configured(target_root)?;
+    collect_final_markdown_if_configured(target_root, paths::output_dir().as_deref())?;
 
     Ok(saved)
 }
@@ -107,12 +107,24 @@ pub fn save_recommended_articles_to_target(
 ) -> Result<Vec<SavedArticle>> {
     let save_path_template =
         std::env::var("SAVE_PATH_TEMPLATE").unwrap_or_else(|_| "articles/${TYPE}/".to_string());
+    save_recommended_articles_with_options(
+        target_root,
+        articles,
+        &save_path_template,
+        paths::output_dir().as_deref(),
+    )
+}
+
+fn save_recommended_articles_with_options(
+    target_root: &Path,
+    articles: &[crate::recommend::TranslatedRecommendedArticle],
+    save_path_template: &str,
+    output_dir: Option<&Path>,
+) -> Result<Vec<SavedArticle>> {
     let now = Local::now().format("%Y-%m-%d").to_string();
-
     let saved =
-        write_recommended_articles_to_target(target_root, articles, &save_path_template, &now)?;
-    collect_final_markdown_if_configured(target_root)?;
-
+        write_recommended_articles_to_target(target_root, articles, save_path_template, &now)?;
+    collect_final_markdown_if_configured(target_root, output_dir)?;
     Ok(saved)
 }
 
@@ -262,12 +274,15 @@ fn append_embedded_translations(mut translated: String, outdir: &Path) -> String
     translated
 }
 
-fn collect_final_markdown_if_configured(source_root: &Path) -> Result<Vec<PathBuf>> {
-    let Some(destination_root) = paths::output_dir() else {
+fn collect_final_markdown_if_configured(
+    source_root: &Path,
+    destination_root: Option<&Path>,
+) -> Result<Vec<PathBuf>> {
+    let Some(destination_root) = destination_root else {
         return Ok(Vec::new());
     };
 
-    let copied = copy_final_markdown_files(source_root, &destination_root)?;
+    let copied = copy_final_markdown_files(source_root, destination_root)?;
     if !copied.is_empty() {
         eprintln!(
             "Final Markdown files copied: {} file(s) -> {}",
@@ -419,7 +434,6 @@ pub fn determine_type(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
 
     #[test]
     fn builds_article_markdown_with_frontmatter() {
@@ -468,9 +482,11 @@ mod tests {
             std::path::PathBuf::from("articles/web/2026-06-23_example-article.md")
         );
         assert!(saved.path.exists());
-        assert!(std::fs::read_to_string(saved.path)
-            .unwrap()
-            .contains("Translated body"));
+        assert!(
+            std::fs::read_to_string(saved.path)
+                .unwrap()
+                .contains("Translated body")
+        );
     }
 
     #[test]
@@ -517,12 +533,16 @@ mod tests {
             saved[1].repo_relative_path,
             PathBuf::from("articles/paper/2026-06-24_second-recommended-article.md")
         );
-        assert!(std::fs::read_to_string(&saved[0].path)
-            .unwrap()
-            .contains("First translated body"));
-        assert!(std::fs::read_to_string(&saved[1].path)
-            .unwrap()
-            .contains("Second translated body"));
+        assert!(
+            std::fs::read_to_string(&saved[0].path)
+                .unwrap()
+                .contains("First translated body")
+        );
+        assert!(
+            std::fs::read_to_string(&saved[1].path)
+                .unwrap()
+                .contains("Second translated body")
+        );
     }
 
     #[test]
@@ -568,17 +588,20 @@ mod tests {
             saved[1].repo_relative_path,
             PathBuf::from("articles/web/2026-06-24_same-title-2.md")
         );
-        assert!(std::fs::read_to_string(&saved[0].path)
-            .unwrap()
-            .contains("First duplicate body"));
-        assert!(std::fs::read_to_string(&saved[1].path)
-            .unwrap()
-            .contains("Second duplicate body"));
+        assert!(
+            std::fs::read_to_string(&saved[0].path)
+                .unwrap()
+                .contains("First duplicate body")
+        );
+        assert!(
+            std::fs::read_to_string(&saved[1].path)
+                .unwrap()
+                .contains("Second duplicate body")
+        );
     }
 
     #[test]
     fn save_recommended_articles_copies_final_markdown_when_output_dir_is_set() {
-        let _guard = env_lock().lock().unwrap();
         let target_root = unique_temp_path("article-collector-save-news-target");
         let source_root = unique_temp_path("article-collector-save-news-source");
         let output_dir = unique_temp_path("article-collector-save-output-dir");
@@ -586,10 +609,8 @@ mod tests {
         std::fs::create_dir_all(&source_root).unwrap();
         let translation = source_root.join("first_translated.md");
         std::fs::write(&translation, "First translated body").unwrap();
-        std::env::set_var("SAVE_PATH_TEMPLATE", "${TYPE}-news/");
-        std::env::set_var(crate::paths::OUTPUT_DIR_ENV, &output_dir);
 
-        let saved = save_recommended_articles_to_target(
+        let saved = save_recommended_articles_with_options(
             &target_root,
             &[crate::recommend::TranslatedRecommendedArticle {
                 item: serde_json::json!({
@@ -598,11 +619,11 @@ mod tests {
                 }),
                 translated_path: translation,
             }],
+            "${TYPE}-news/",
+            Some(&output_dir),
         )
         .unwrap();
 
-        std::env::remove_var("SAVE_PATH_TEMPLATE");
-        std::env::remove_var(crate::paths::OUTPUT_DIR_ENV);
         assert_eq!(saved.len(), 1);
         assert_eq!(
             saved[0].repo_relative_path,
@@ -867,10 +888,5 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{}-{suffix}", std::process::id()))
-    }
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
     }
 }

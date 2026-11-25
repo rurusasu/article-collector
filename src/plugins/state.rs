@@ -1,6 +1,6 @@
-use crate::plugins::paths::{validate_plugin_name, PluginPaths};
+use crate::plugins::paths::{PluginPaths, validate_plugin_name};
 use crate::plugins::types::InstalledPlugin;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::Component;
@@ -28,7 +28,7 @@ impl InstalledPluginStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => {
                 return Err(error)
-                    .with_context(|| format!("Failed to list plugins in {}", root.display()))
+                    .with_context(|| format!("Failed to list plugins in {}", root.display()));
             }
         };
 
@@ -67,7 +67,7 @@ impl InstalledPluginStore {
             Err(error) => {
                 return Err(error).with_context(|| {
                     format!("Failed to read plugin state {}", installed_path.display())
-                })
+                });
             }
         };
         let installed: InstalledPlugin = serde_json::from_slice(&bytes)

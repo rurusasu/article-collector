@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use regex::Regex;
 use reqwest::Client;
 use serde_json::Value;
@@ -124,11 +124,7 @@ fn extract_xml_texts(text_re: &Regex, data: &str) -> Vec<String> {
         .captures_iter(data)
         .filter_map(|c| {
             let t = html_escape::decode_html_entities(&c[1]).trim().to_string();
-            if t.is_empty() {
-                None
-            } else {
-                Some(t)
-            }
+            if t.is_empty() { None } else { Some(t) }
         })
         .collect()
 }

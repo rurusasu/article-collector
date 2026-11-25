@@ -3,8 +3,8 @@
 #[path = "../src/plugins/types.rs"]
 mod types;
 
-use anyhow::{bail, Context, Result};
-use base64::prelude::{Engine as _, BASE64_STANDARD};
+use anyhow::{Context, Result, bail};
+use base64::prelude::{BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
 use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

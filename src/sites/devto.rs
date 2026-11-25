@@ -1,5 +1,5 @@
 use anyhow::Context;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::types::{
     ArticleFetchFuture, DiscoveryEndpoint, FetchRoute, JsonRequest, SaveType, Site, UrlRule,
