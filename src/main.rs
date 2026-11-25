@@ -45,6 +45,9 @@ enum Commands {
     /// 取得した記事を翻訳
     Translate {
         /// 入力 JSON ファイルパス
+        ///
+        /// 省略すると一時ディレクトリ内の raw.json を読み込みます。
+        /// 一時ディレクトリは環境変数 ARTICLE_COLLECTOR_TEMP_DIR で指定できます。
         input: Option<PathBuf>,
     },
     /// 翻訳記事を target repo の作業ブランチへ保存
