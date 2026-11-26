@@ -26,6 +26,7 @@ pub struct RecommendSiteConfig {
     pub enabled: Option<bool>,
     pub limit: Option<usize>,
     pub query: Option<String>,
+    pub seed_url: Option<String>,
     pub options: Option<toml::Table>,
 }
 

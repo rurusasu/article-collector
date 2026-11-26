@@ -342,6 +342,16 @@ plugin source 固有設定は、signed manifest が宣言する JSON Schema に�
 `options` 配下へ書く。plugin source では `query`、built-in source では
 `options` を使えない。
 
+独自のプラグインで探索する場合は、`[recommend.source.<name>].seed_url` に HTTP(S) の
+起点 URL を指定する。`<name>` はインストール済みプラグインの正式な source 名。
+たとえば、次の設定で `article-collector article collect https://example.com/news --discover`
+を実行すると `example` source を使う。組み込み探索と公式 X プラグインの既定 URL が優先される。
+
+```toml
+[recommend.source.example]
+seed_url = "https://example.com/news"
+```
+
 ```toml
 [recommend.source.twitter]
 limit = 10

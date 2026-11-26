@@ -171,7 +171,7 @@ async fn collect_recommended_with_plugins<C>(
 where
     C: PluginSourceCollector + ?Sized,
 {
-    let recommendation_target = resolve_recommendation_target(target, catalog)?;
+    let recommendation_target = resolve_recommendation_target(target, config, catalog)?;
     let items = match recommendation_target {
         RecommendationTarget::BuiltIn {
             site_name,
@@ -234,6 +234,7 @@ where
 
 fn resolve_recommendation_target<'a>(
     target: &'a str,
+    config: &RecommendConfig,
     catalog: &PluginSourceCatalog,
 ) -> Result<RecommendationTarget<'a>> {
     let url = Url::parse(target)
@@ -277,9 +278,43 @@ fn resolve_recommendation_target<'a>(
             site_name,
             endpoint: *endpoint,
         })
+    } else if let Some(source) = configured_plugin_source(&url, config, catalog)? {
+        Ok(RecommendationTarget::Plugin {
+            source: Box::new(source.clone()),
+        })
     } else {
         Ok(RecommendationTarget::PageLinks { url: target })
     }
+}
+
+fn configured_plugin_source<'a>(
+    url: &Url,
+    config: &RecommendConfig,
+    catalog: &'a PluginSourceCatalog,
+) -> Result<Option<&'a PluginSource>> {
+    let mut matched_source = None;
+    for (name, settings) in &config.source {
+        let Some(seed_url) = &settings.seed_url else {
+            continue;
+        };
+        let seed = Url::parse(seed_url)
+            .ok()
+            .filter(|seed| matches!(seed.scheme(), "http" | "https") && seed.has_host())
+            .with_context(|| format!("Invalid HTTP(S) seed_url for plugin source '{name}'"))?;
+        if seed != *url {
+            continue;
+        }
+        if matched_source.is_some() {
+            bail!("Several plugin sources configure the same seed URL: {url}");
+        }
+        matched_source = Some(
+            catalog
+                .resolve(name)
+                .filter(|source| source.name == *name)
+                .with_context(|| format!("No installed plugin source named '{name}'"))?,
+        );
+    }
+    Ok(matched_source)
 }
 
 fn configured_discovery_endpoint(url: &Url) -> Option<(&'static str, DiscoveryEndpoint)> {
@@ -2840,6 +2875,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolves_configured_seed_url_to_installed_plugin_source() {
+        let (_temp, catalog) = plugin_catalog(&[("example", &[])]);
+        let config: RecommendConfig = toml::from_str(
+            r#"
+            [source.example]
+            seed_url = "https://example.com/news"
+            "#,
+        )
+        .unwrap();
+        let target =
+            resolve_recommendation_target("https://example.com/news", &config, &catalog).unwrap();
+        let RecommendationTarget::Plugin { source } = target else {
+            panic!("configured seed URL should resolve to the installed plugin");
+        };
+        assert_eq!(source.name, "example");
+        assert!(matches!(
+            resolve_recommendation_target("https://example.com/other", &config, &catalog).unwrap(),
+            RecommendationTarget::PageLinks { .. }
+        ));
+    }
+
     /// 検証: plugin の query と built-in の plugin options は起動前に拒否する
     /// 理由: backend ごとの入力 contract を曖昧にしないため
     /// リスク: 無視された設定が成功に見え、意図と異なる候補を返す
@@ -2892,6 +2949,7 @@ mod tests {
                 },
         } = resolve_recommendation_target(
             "https://news.ycombinator.com/",
+            &RecommendConfig::default(),
             &PluginSourceCatalog::default(),
         )
         .unwrap()
@@ -2915,6 +2973,7 @@ mod tests {
                 },
         } = resolve_recommendation_target(
             "https://news.ycombinator.com/item?id=123",
+            &RecommendConfig::default(),
             &PluginSourceCatalog::default(),
         )
         .unwrap()
@@ -2931,6 +2990,7 @@ mod tests {
     fn resolves_other_urls_as_generic_links() {
         let RecommendationTarget::PageLinks { url } = resolve_recommendation_target(
             "https://example.com/article",
+            &RecommendConfig::default(),
             &PluginSourceCatalog::default(),
         )
         .unwrap() else {
@@ -3182,6 +3242,7 @@ mod tests {
             endpoint,
         } = resolve_recommendation_target(
             "https://export.arxiv.org/api/query",
+            &config,
             &PluginSourceCatalog::default(),
         )
         .unwrap()

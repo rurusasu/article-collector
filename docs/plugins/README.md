@@ -60,6 +60,8 @@ sequenceDiagram
 
 登録済みの URL に対応する discovery source を解決する。X の source は
 `article-collector article collect https://x.com/ --discover` で利用する。
+他のプラグインは `[recommend.source.<name>].seed_url` で正式な source 名と HTTP(S) の
+起点 URL を対応づける。組み込み探索と公式 X プラグインの既定 URL が優先される。
 
 plugin source の設定は `options` 配下へ隔離する。現行 X plugin の設定例は次の
 とおりである。
