@@ -27,14 +27,13 @@ tweet URL は `x.com` または `twitter.com` 配下の `/status/<id>` を使う
 X の recommendation discovery は core から分離された signed `x` plugin が担当する。
 core の `twitter` site entry には discovery endpoint がなく、X の recommend source は
 installed plugin の manifest から解決される。
-plugin を install すると、source list を指定しない `recommend all` では X も対象になる。
-X を除外したい場合は、`[recommend].sources` に built-in source だけを列挙する。明示的に
-X を使う場合は次を実行する。
+`https://x.com/` または `https://twitter.com/` を起点 URL として指定する。
 
 ```bash
 article-collector plugin install x
 export X_OAUTH_CLIENT_ID="your-public-x-client-id"
 article-collector plugin configure x
+article-collector article collect https://x.com/ --discover
 ```
 
 X Developer Platform には loopback callback URL

@@ -6,7 +6,7 @@
 
 コード上では、サイトを情報 source の唯一の基準として扱う。discovery、fetch、save、history、translation、PR 作成は、同じパイプライン内の独立した段階として分ける。
 
-`recommend` command は target を解決し、記事処理パイプラインと同じ discovery / fetch の基本部品を呼び出す。
+`article collect --discover` は起点 URL を解決し、記事処理パイプラインと同じ discovery / fetch の基本部品を呼び出す。
 
 ## ディレクトリ構成
 
@@ -116,7 +116,7 @@ src/
 | `plugins/` | optional source plugin の core 側 trust/lifecycle 境界 | signed registry、safe local state、transactional install、MCP stdio client、dynamic source adapter、management CLI を扱う。site 固有 connector の domain code は `x_connector/` に置く。 |
 | `x_connector/` | X plugin の connector 実装 | OAuth 2.0 PKCE、token store、X hosted MCP client、候補正規化、plugin 側 stdio server を扱う。core の direct status fetch とは別 process で動く。 |
 | `src/bin/article-collector-x.rs` | X plugin の process entrypoint | `x_connector::stdio::run_stdio` だけを起動し、plugin artifact として 5 target に package する。 |
-| `recommend` command | discovery / pipeline entrypoint | target を解決し、discovery / pipeline 内部処理を呼び出す。 |
+| `article collect` | discovery / pipeline entrypoint | `--discover` で探索経路を選び、`--through` で到達点を指定する。 |
 
 ## 信頼できる唯一の定義
 

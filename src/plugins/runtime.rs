@@ -850,7 +850,7 @@ exit 9
     }
 
     /// 検証: plugin制御のJSON-RPC error dataを診断へ出さずmessageもbounded/redactedにする
-    /// 理由: error chainはrecommend allのstructured logへ永続化されるため
+    /// 理由: 探索エラーの詳細は構造化ログに出力されるため
     /// リスク: credential漏えいと最大frame相当のlog膨張
     #[test]
     fn json_rpc_error_diagnostic_is_bounded_and_redacted() {

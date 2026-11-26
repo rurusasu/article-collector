@@ -57,7 +57,7 @@ $env:Path = "$binDir;$env:Path"
 `$env:Path` の変更は現在の PowerShell セッションだけに適用される。次回以降も
 PATH に含める場合は、`$binDir` をユーザー環境変数 `Path` に追加する。
 
-`collect` で PR を作成する場合は [GitHub CLI](https://cli.github.com/) を別途
+`article collect --through pr` を実行する場合は [GitHub CLI](https://cli.github.com/) を別途
 インストールし、選択した ACP agent（例: Codex）も利用可能にする。どちらも
 `article-collector` のインストーラーには含まれない。
 
@@ -92,13 +92,12 @@ winget install Rustlang.Rustup
 
 ## まず使う
 
-インストール後、まず version と記事取得だけを確認する。`fetch` と単一 source の
-`recommend` は ACP agent や GitHub 認証を必要としない。
+インストール後、まずバージョン、記事取得、候補探索を確認する。以下の操作には翻訳 agent や GitHub 認証を必要としない。
 
 ```bash
 article-collector --version
-article-collector fetch https://news.ycombinator.com/item?id=42575537
-article-collector recommend hackernews --limit 10
+article-collector article collect 'https://news.ycombinator.com/item?id=42575537'
+article-collector article collect https://news.ycombinator.com/ --discover
 ```
 
 PR作成まで実行する場合は、先に GitHub CLI と翻訳 agent を認証する。初回確認では
@@ -110,7 +109,7 @@ codex login
 export ACP_AGENT="codex"
 export TARGET_REPO="your-org/your-repo"
 export AUTO_MERGE="false"
-article-collector collect https://news.ycombinator.com/item?id=42575537
+article-collector article collect 'https://news.ycombinator.com/item?id=42575537' --through pr
 ```
 
 Windows PowerShellでは環境変数の設定と実行ファイルの呼び出しを次のように書く:
@@ -119,18 +118,15 @@ Windows PowerShellでは環境変数の設定と実行ファイルの呼び出�
 $env:ACP_AGENT = "codex"
 $env:TARGET_REPO = "your-org/your-repo"
 $env:AUTO_MERGE = "false"
-& "$env:USERPROFILE\bin\article-collector.exe" collect "https://news.ycombinator.com/item?id=42575537"
+& "$env:USERPROFILE\bin\article-collector.exe" article collect "https://news.ycombinator.com/item?id=42575537" --through pr
 ```
-
-`collect` / `recommend` の詳細、X plugin、設定ファイルの例は次の機能別セクションを
-参照する。
 
 ## 処理フロー
 
-`article-collector collect <URL>` の全体フロー:
+`article collect <URL> --through pr` は取得から PR 作成までを実行する。
 
 ```text
-User -> article-collector collect URL
+article-collector article collect URL --through pr
   -> fetch URL -> raw.json
   -> ACP agent translate -> translated.md
   -> target repository: prepare article branch
@@ -145,10 +141,14 @@ User -> article-collector collect URL
 
 ## 機能別の使い方
 
-fetch のみなら翻訳 agent や GitHub 認証なしで試せる。
+### 記事の取得と翻訳
+
+記事 URL を指定すると、本文を取得して `raw.json` に保存する。`--through translate`
+を追加すると、翻訳結果も `translated.md` に保存する。
 
 ```bash
-article-collector fetch https://news.ycombinator.com/item?id=42575537
+article-collector article collect 'https://news.ycombinator.com/item?id=42575537'
+article-collector article collect 'https://news.ycombinator.com/item?id=42575537' --through translate
 ```
 
 ### X recommendation plugin
@@ -162,7 +162,7 @@ article-collector plugin list
 export X_OAUTH_CLIENT_ID="your-public-x-client-id"
 article-collector plugin configure x
 article-collector plugin doctor x
-article-collector recommend twitter --config article-collector.toml --limit 10
+article-collector article collect https://x.com/ --discover
 ```
 
 `x` plugin は [latest release](https://github.com/rurusasu/article-collector/releases/latest)
@@ -186,59 +186,26 @@ release・refreshなどplugin配布の運用は [Plugin 配布](docs/plugins/dis
 参照する。secretの値やredaction規則は [X OAuthとplugin secretの設定](docs/plugins/secret.md)
 にまとめている。
 
-レコメンド/関連リンクを上位30件集める場合:
+### 記事候補の探索と処理
+
+`--discover` を付けると、URL を起点として記事候補を探す。既定で候補一覧を
+`raw.json` に保存する。`--through raw` は各候補の本文取得まで進み、
+`--through translate` は取得した本文を翻訳する。
 
 ```bash
-article-collector recommend hackernews --limit 30
-article-collector recommend zenn --limit 30
-article-collector recommend qiita --query "Rust tag:rust" --limit 10
-article-collector recommend bluesky --query "atproto rust" --limit 10
-article-collector recommend arxiv --limit 10
-article-collector recommend arxiv --query "cat:cs.CV OR cat:cs.LG" --limit 10
-article-collector recommend github-advisory --limit 10
-article-collector recommend cisa-kev --limit 10
-article-collector recommend nvd --query "openssl" --limit 5
-article-collector recommend aws-whatsnew --limit 5
-article-collector recommend github-search --query "stars:>1000 pushed:>2026-01-01 archived:false" --limit 5
+article-collector article collect https://news.ycombinator.com/ --discover
+article-collector article collect https://zenn.dev/feed --discover --through raw
+article-collector article collect https://example.com/links --discover --through translate
 ```
 
-登録済み site のレコメンド記事をまとめて集め、翻訳まで続ける場合:
+カレントディレクトリの `article-collector.toml` で探索件数と source 固有の設定を
+指定できる。`[recommend].limit` は既定件数、`[recommend.source.<site>].limit` は
+source ごとの件数を設定する。Qiita API v2 items search と Bluesky の public AppView
+`app.bsky.feed.searchPosts` は認証なしで利用でき、検索条件はそれぞれ
+`[recommend.source.qiita].query` と `[recommend.source.bluesky].query` で指定する。
 
-```bash
-export ACP_AGENT="codex"
-article-collector recommend all --limit 30
-```
-
-`ACP_AGENT` が未設定の場合は `raw.json` 作成後に翻訳を skip する。
-
-`article-collector.toml` が current directory にある場合、`recommend all` は source 別設定を読み込む。`[recommend].sources` が未指定または空の場合は、core内のbuilt-in source registryをregistry順で、その後にinstalled plugin catalogのsourceを名前順で使う。非空の list がある場合はその list に対象 source と順序を限定する。別パスの設定を使う場合は `--config` を指定する。
-
-```bash
-article-collector recommend all --config article-collector.toml
-```
-
-`twitter` / `x` / `x-twitter` recommendation source は、上記の [X recommendation plugin](#x-recommendation-plugin)
-が所有する。checked-in の
-`article-collector.toml` は `[recommend].sources` に `twitter` を含めないため、X を
-除外したまま実行できる。plugin 未 install の状態で X を明示指定した場合は install を
-案内する。
-
-`qiita` source は Qiita API v2 items search を使う。`bluesky` / `bsky` source は public AppView の `app.bsky.feed.searchPosts` を使う。どちらも認証なしで利用でき、検索条件は `[recommend.source.qiita].query` / `[recommend.source.bluesky].query` で指定する。
-
-推薦 URL の記事本文も取得し、記事ごとの JSON / 翻訳 Markdown を作成する場合:
-
-```toml
-[recommend]
-fetch_articles = true
-```
-
-```bash
-article-collector recommend all --limit 30 --config article-collector.toml
-article-collector recommend hackernews --limit 10 --config article-collector.toml
-article-collector recommend https://example.com/links --limit 5 --config article-collector.toml
-```
-
-`[recommend].fetch_articles = true` にすると、推薦一覧を取得した後に各 URL の記事本文も取得する。一時成果物は `ARTICLE_COLLECTOR_TEMP_DIR` 配下に作成される。`ACP_AGENT` が設定されている場合は記事別翻訳 Markdown、`translated.md` index、SQLite seen 記録まで作成し、未設定の場合は記事別 JSON だけを作成する。
+`--through translate` を指定すると、`ARTICLE_COLLECTOR_TEMP_DIR` 配下に記事別 JSON
+と翻訳 Markdown、記事別の一覧をまとめた `translated.md` が作成される。
 
 ```text
 raw.json
@@ -256,7 +223,7 @@ recommend-fetch-failures.json
 ```md
 # Recommended Articles
 
-Generated from `recommend all` with `[recommend].fetch_articles = true`.
+Generated from `https://news.ycombinator.com/`.
 
 ## Articles
 
@@ -281,7 +248,7 @@ Slack に手動投稿する場合は、生成後の `translated.md` をそのま
 ```powershell
 $env:ARTICLE_COLLECTOR_TEMP_DIR = "$PWD/.tmp/recommend-slack"
 $env:ACP_AGENT = "codex"
-article-collector recommend all --limit 5 --config article-collector.toml
+article-collector article collect https://news.ycombinator.com/ --discover --through translate
 Get-Content "$env:ARTICLE_COLLECTOR_TEMP_DIR/translated.md" -Raw
 ```
 
@@ -296,80 +263,44 @@ Invoke-RestMethod `
   -Body (@{ text = $message } | ConvertTo-Json)
 ```
 
-Discord, Teams, GitHub comment など Markdown を受け取れる場所にも同じ `translated.md` を貼り付けられる。投稿前に長さを抑えたい場合は、`--limit` や `[recommend.source.<site>].limit` で source ごとの件数を減らす。
+Discord, Teams, GitHub comment など Markdown を受け取れる場所にも同じ `translated.md` を貼り付けられる。投稿前に長さを抑えたい場合は、`[recommend.source.<site>].limit` で source ごとの件数を減らす。
 
-本文取得に失敗した URL は `raw.json` や `translated.md` には入れず、`recommend-fetch-failures.json` に `url`, `title`, `stage`, `error` を保存する。`ACP_AGENT` が未設定の場合は記事別 JSON だけを作成し、翻訳ファイル、`translated.md` index、SQLite seen 記録は作成しない。`ACP_AGENT` が設定されている場合、SQLite seen には記事別翻訳まで成功した item だけを記録する。
+本文の取得や翻訳に失敗した URL は `recommend-fetch-failures.json` に `url`、`title`、
+`stage`、`error` とともに記録される。翻訳した記事は SQLite の既読履歴に記録する。
+PDF は本文取得の対象外で、`stage: "unsupported_pdf"` として記録される。
 
-PDF URL は現時点では本文取得対象外で、`recommend-fetch-failures.json` に `stage: "unsupported_pdf"` として記録される。PDF 本文抽出は coming soon。
-
-取得・翻訳できた推薦記事を target repo に保存し、1つの PR にまとめて作成する場合:
-
-```toml
-[recommend]
-fetch_articles = true
-create_pr = true
-```
+候補記事を翻訳し、保存先リポジトリの一つの PR にまとめるには `--through pr` を指定する。
 
 ```bash
 export ACP_AGENT="codex"
 export TARGET_REPO="your-org/your-repo"
-article-collector recommend all --config article-collector.toml
+article-collector article collect https://news.ycombinator.com/ --discover --through pr
 ```
 
-`[recommend].create_pr = true` は `[recommend].fetch_articles = true` が必須。翻訳済み記事が 0 件の場合、target repo の clone / branch 作成前に非ゼロ終了する。PR には `recommended_articles/*_translated.md` ではなく、target repo の `SAVE_PATH_TEMPLATE` に従って保存した Markdown 記事ファイルをすべて含める。
+翻訳済み記事が 0 件の場合は、保存先の clone やブランチ作成に進まず終了する。
+PR に含める Markdown は、保存先リポジトリの `SAVE_PATH_TEMPLATE` に従って配置する。
 
 PR 作成用の target repo は `TARGET_DIR` を再利用する前に git work tree として検証する。壊れた `.git` だけが残っている場合など、既存 `TARGET_DIR` が無効な場合は `TARGET_DIR.broken-*` に退避してから再 clone する。clone は sibling の短い process-specific staging directory（通常は `.c<PID>`、既存なら `.c<PID>-N`）に作成し、有効な git work tree と確認できた場合だけ `TARGET_DIR` に昇格する。`git` / `gh` の外部コマンドは 5 分で timeout し、失敗時は非ゼロ終了のまま扱う。
 
 収集・翻訳中の一時ディレクトリと最終成果物の保存先を分ける場合は、`ARTICLE_COLLECTOR_TEMP_DIR` を temporary directory として使い、`ARTICLE_COLLECTOR_OUTPUT_DIR` に最終成果物の保存先を指定する。`ARTICLE_COLLECTOR_OUTPUT_DIR` が設定されている場合、保存ステップ後に target repo 内の `*-news` directory 配下を走査し、`.md` files のみを相対パスを保って最終成果物ディレクトリへコピーする。JSON など Markdown 以外の files や `*-news` 以外の directory はコピーしない。
 
-全工程を実行する場合:
-
-Codex を ACP 経由で使う場合:
-
-```bash
-gh auth login
-codex login
-export ACP_AGENT="codex"
-export TARGET_REPO="your-org/your-repo"
-export AUTO_MERGE="false"
-
-article-collector collect https://news.ycombinator.com/item?id=42575537
-```
-
-翻訳済み Markdown の保存と PR 作成を分けて実行する場合:
-
-```bash
-article-collector save https://news.ycombinator.com/item?id=42575537
-article-collector pr articles/web/2026-06-23_example.md
-article-collector pr D:/tmp/article-collector-target-repo/articles/web/2026-06-23_example.md
-```
-
-Codex 以外の agent を使う場合だけ、`ACP_AGENT` に短い名前を指定する:
-
-```bash
-export ACP_AGENT="gemini"
-```
-
 ## コマンド一覧
 
-| コマンド | 役割 | 主な出力 / 副作用 |
-|----------|------|-------------------|
-| `article-collector collect <URL>` | 取得、翻訳、保存、PR 作成をまとめて実行 | `raw.json` / `translated.md` を作成し、保存先 repo に PR を作成 |
-| `article-collector fetch <URL>` | URL から記事本文を取得 | `raw.json` を作成 |
-| `article-collector translate [INPUT_JSON]` | 取得済み JSON を翻訳。省略時は `raw.json` を読む | `translated.md` を作成 |
-| `article-collector save <URL>` | 翻訳済み Markdown を target repo の `article/<timestamp>` branch に保存 | target repo に Markdown ファイルを作成。commit / PR はしない |
-| `article-collector pr <PATH>` | 保存済み Markdown を commit / push して PR 作成 | `PATH` は target repo 相対 path または target repo 配下の絶対 path |
-| `article-collector recommend <SITE_OR_URL> --limit 30` | site 名または起点 URL からレコメンド/関連リンクを収集 | `raw.json` に推薦一覧を作成 |
-| `article-collector recommend qiita --query "<QUERY>" --limit 10` | Qiita API v2 items search から技術記事候補を収集 | `raw.json` に Qiita 記事推薦一覧を作成 |
-| `article-collector recommend bluesky --query "<QUERY>" --limit 10` | Bluesky public AppView searchPosts から post 候補を収集 | `raw.json` に Bluesky post 推薦一覧を作成 |
-| `article-collector recommend arxiv --query "<QUERY>" --limit 10` | arXiv API query から新着論文を収集 | `raw.json` に論文推薦一覧を作成 |
-| `article-collector recommend github-advisory --limit 10` | GitHub Global Security Advisories API から公開 advisory を収集 | `raw.json` に security advisory 推薦一覧を作成 |
-| `article-collector recommend cisa-kev --limit 10` | CISA KEV catalog から悪用確認済み CVE を収集 | CVE ごとの NVD URL を使った推薦一覧を作成 |
-| `article-collector recommend github-search --query "<QUERY>" --limit 5` | GitHub Search API から OSS repository 候補を収集 | `raw.json` に repository 推薦一覧を作成 |
-| `article-collector recommend all --limit 30` | recommend source が設定された全 site から推薦記事を収集する。`ACP_AGENT` 設定時だけ翻訳する | `raw.json` を作成。`ACP_AGENT` 設定時は `translated.md` も作成 |
-| `article-collector recommend all --config article-collector.toml` | source 別 config を使って推薦記事を収集 | `raw.json` に推薦一覧を作成。`[recommend].sources` が非空なら対象 source をその list に限定し、source 別 options / limit / 記事本文取得 / PR 作成を config で上書き |
-| `article-collector history clear --config article-collector.toml` | SQLite recommend history を clear | 次回以降の `recommend` で既読記事も再出力可能にする |
-| `article-collector history clear all --config article-collector.toml` | SQLite recommend history と env 指定 artifact directory を clear | `history clear` に加えて、`ARTICLE_COLLECTOR_TEMP_DIR` / `ARTICLE_COLLECTOR_OUTPUT_DIR` と配下ファイルを削除する。実行前に削除対象を確認する |
+`article-collector article collect <URL> [--discover] [--through raw|translate|pr]`
+の `<URL>` には HTTP または HTTPS の URL を指定する。`--discover` は候補探索を
+有効にするフラグで、値を取らない。
+
+| `--through` | 記事 URL を直接指定 | `--discover` を指定 |
+| --- | --- | --- |
+| 省略 | 記事本文を `raw.json` に保存 | 候補一覧を `raw.json` に保存 |
+| `raw` | 記事本文を `raw.json` に保存 | 候補を探し、各記事の本文を取得 |
+| `translate` | 取得・翻訳して `translated.md` を作成 | 候補記事の翻訳と一覧の Markdown を作成 |
+| `pr` | 取得・翻訳し、作業ブランチに配置して PR を作成 | 候補記事を取得・翻訳し、まとめて PR を作成 |
+
+| コマンド | 動作 | 出力または副作用 |
+| --- | --- | --- |
+| `article-collector history clear [--config PATH]` | 推薦履歴を削除 | 次回の探索で既読記事を再取得できる |
+| `article-collector history clear --include-artifacts [--config PATH]` | 推薦履歴と成果物を削除 | 環境変数で設定済みの一時ディレクトリと出力ディレクトリを削除 |
 | `article-collector plugin install <NAME[@VERSION]>` | official signed registry から compatible plugin を install | artifact の byte length/SHA-256 と MCP descriptor を検証後、version を atomic activate |
 | `article-collector plugin list` | installed plugin を名前順で表示 | plugin 名、version、source を表示 |
 | `article-collector plugin update <NAME>` | latest compatible version へ update | current version と同じ場合は no-op |
@@ -381,27 +312,28 @@ export ACP_AGENT="gemini"
 
 | 環境変数 | 必要な操作 | Default | 説明 |
 |----------|----------|---------|-------------|
-| `ARTICLE_COLLECTOR_TEMP_DIR` | `fetch` / `translate` / `save` / `collect` / `recommend` | OS 依存 | `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中に使う temporary directory |
-| `ARTICLE_COLLECTOR_OUTPUT_DIR` | `save` / `collect` / 成果物コピーを行うrecommend | - | target repo 内の `*-news` directory 配下にある `.md` files をコピーする最終成果物 directory |
-| `ACP_AGENT` | `translate` / `collect` / `recommend all` の翻訳 | - | 内蔵 mapping から選ぶ ACP agent。`codex` / `gemini` / `claude`。未指定なら翻訳を skip する |
-| `X_OAUTH_CLIENT_ID` | `plugin configure x` | - | X Developer Platformのpublic OAuth 2.0 PKCE client ID。詳細は [X OAuthとplugin secretの設定](docs/plugins/secret.md) |
-| `TRANSLATE_LANG` | `translate` / `collect` / `recommend all` の翻訳 | `ja` | 翻訳先言語コード |
-| `TARGET_REPO` | `save` / `pr` / `collect` / `create_pr = true` のrecommend | - | 保存先 GitHub リポジトリ (`owner/repo`) |
-| `TARGET_DIR` | `save` / `pr` / `collect` | OS 依存 | 保存先 repo のローカル clone 先 |
-| `ARTICLE_COLLECTOR_GH_BIN` | `pr` / PR作成を行う `collect`・recommend | `gh` | PR 作成に使う GitHub CLI executable path |
-| `SAVE_PATH_TEMPLATE` | `save` / `collect` / `create_pr = true` のrecommend | `articles/${TYPE}/` | 保存先パステンプレート |
-| `AUTO_MERGE` | PR作成を行う `pr` / `collect`・recommend | `true` | `true` の場合だけ PR 作成後に merge する。初回は `false` 推奨 |
+| `ARTICLE_COLLECTOR_TEMP_DIR` | `article collect` | OS 依存 | `raw.json`、`translated.md`、`recommended_articles/` などの一時ディレクトリ |
+| `ARTICLE_COLLECTOR_OUTPUT_DIR` | `--through pr` | - | 保存先 repo の `*-news` 配下にある Markdown のコピー先 |
+| `ACP_AGENT` | `--through translate`、`--through pr` | - | 翻訳用の ACP agent を `codex`、`gemini`、`claude` から選ぶ |
+| `X_OAUTH_CLIENT_ID` | `plugin configure x` | - | X Developer Platform の public OAuth 2.0 PKCE client ID。[設定方法](docs/plugins/secret.md) |
+| `TRANSLATE_LANG` | `--through translate`、`--through pr` | `ja` | 翻訳先言語コード |
+| `TARGET_REPO` | `--through pr` | - | 保存先 GitHub リポジトリ（`owner/repo`） |
+| `TARGET_DIR` | `--through pr` | OS 依存 | 保存先リポジトリのローカル clone 先 |
+| `ARTICLE_COLLECTOR_GH_BIN` | `--through pr` | `gh` | PR 作成に使う GitHub CLI 実行ファイルのパス |
+| `SAVE_PATH_TEMPLATE` | `--through pr` | `articles/${TYPE}/` | 保存先パステンプレート |
+| `AUTO_MERGE` | `--through pr` | `true` | `true` の場合は PR 作成後に merge。初回は `false` を推奨 |
 
-\* 未指定または空文字の場合、翻訳は実行されず `translated.md` は作成されない。`collect` は保存/PR 作成に進まない。
-\* `TARGET_REPO` は `save` / `pr` / `collect` の保存・PR ステップと、recommend の `create_pr = true` の場合だけ必要。
-
-> **削除操作:** `history clear all` は、設定済みの `ARTICLE_COLLECTOR_TEMP_DIR` と
-> `ARTICLE_COLLECTOR_OUTPUT_DIR` の directory 自体と配下ファイルを削除する。必要な
-> 成果物を退避してから実行すること。
+> **削除操作:** `history clear --include-artifacts` は、設定済みの
+> `ARTICLE_COLLECTOR_TEMP_DIR` と `ARTICLE_COLLECTOR_OUTPUT_DIR` を、配下のファイルごと削除する。
 
 ### TOML config
 
-`article-collector.toml` は current directory から自動検出する。明示的に別ファイルを使う場合は `--config <PATH>` を指定する。
+`article collect --discover` と `history clear` は、カレントディレクトリの
+`article-collector.toml` を自動検出する。`history clear` では `--config <PATH>` で
+別のファイルを指定できる。
+
+以前の設定から移行する場合は、`[recommend]` の `sources`、`fetch_articles`、`create_pr`
+を削除する。探索元は起点 URL、到達点は `--through` で指定する。
 
 X pluginのcallback URL、OAuth scope、tokenの保存場所は
 [X OAuthとplugin secretの設定](docs/plugins/secret.md)に記載する。
@@ -420,31 +352,8 @@ query = "(AI OR Rust OR security) lang:en -is:retweet"
 ```
 
 ```toml
-# この例の sources は built-in source だけを明示している。
-# X plugin を recommend all に含める場合は、list に "twitter" を追加する。
 [recommend]
-sources = [
-  "hackernews",
-  "devto",
-  "zenn",
-  "qiita",
-  "bluesky",
-  "arxiv",
-  "github-advisory",
-  "cisa-kev",
-  "nvd",
-  "aws-whatsnew",
-  "aws-security",
-  "google-cloud-blog",
-  "kubernetes",
-  "cncf",
-  "infoq",
-  "martinfowler",
-  "github-search",
-]
 limit = 30
-fetch_articles = false
-create_pr = false
 # history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 [recommend.source.arxiv]
@@ -480,7 +389,9 @@ limit = 5
 query = "stars:>1000 pushed:>2026-01-01 archived:false"
 ```
 
-優先順位は CLI 明示指定、source 別 config、recommend 全体 config、コード内 default の順。`[recommend].sources` は `recommend all` の対象 source と実行順を固定するための list で、未指定または空の場合は registry 上の built-in source に加えて install 済み plugin source も使う。X を除外したい場合は、`article-collector.toml` のように built-in source だけを非空の list に列挙する。source 別の `enabled = false` はその source を skip する。`recommend all --query ...` は引き続き拒否する。X plugin の mode/query は `[recommend.source.twitter.options]`、その他の query 対応 source は `query` で指定する。`github-advisory`, `cisa-kev`, RSS/Atom feed 系 source は query 非対応。記事本文取得と PR 作成は CLI flag ではなく `[recommend].fetch_articles` / `[recommend].create_pr` で指定する。
+探索件数は source 別の `limit`、`[recommend].limit`、組み込みの既定値の順に適用する。
+X plugin の mode と query は `[recommend.source.twitter.options]` に記述し、検索対応の
+built-in source では source 別の `query` を使う。処理範囲は CLI の `--through` で選ぶ。
 
 ### ACP agent 利用時の注意
 
@@ -531,17 +442,22 @@ agent から `session/request_permission` が来た場合は `cancelled` で応�
 | OpenReview | generic web fetch | `paper` | None |
 | その他の `http://` / `https://` URL | generic web fetch | `web` | None |
 
-### レコメンド収集
+### 探索 URL と履歴
 
-`article-collector recommend <SITE_OR_URL>` は `raw.json` に推薦一覧を保存する。`hackernews` / `hn` では Firebase `topstories` からリンク付き story を上位30件取得する。`devto` / `dev.to` では Dev.to public API から上位記事を取得する。`zenn` では Zenn トレンド RSS を取得する。`twitter` / `x` / `x-twitter` は install 済みの `x` plugin を通じて `search` / `timeline` / `bookmarks` を収集する。`qiita` / `qiita.com` では Qiita API v2 items search から query に一致する記事を取得する。`bluesky` / `bsky` / `bsky.app` では public AppView searchPosts から query に一致する post を取得する。`arxiv` では arXiv API から AI / NLP / Computer Vision / Machine Learning 系の新着論文を取得する。`github-advisory` / `github-advisories` / `ghsa` では GitHub Global Security Advisories API から公開 advisory を取得する。`cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search` も recommend source として利用できる。その他の `http://` / `https://` URL ではページ内リンクを上から抽出する。
+組み込み discovery endpoint に対応する URL は、その source の API や feed を使う。
+例として、Hacker News の `https://news.ycombinator.com/`、Zenn の
+`https://zenn.dev/feed`、arXiv の `https://export.arxiv.org/api/query` がある。
+X の `https://x.com/` と `https://twitter.com/` からの探索は、インストール済みの
+`x` plugin を使う。その他の Web ページでは、ページ内の HTTP(S) リンクをたどる候補を抽出する。
 
-`article-collector recommend arxiv --query "cat:cs.CV OR cat:cs.LG" --limit 10`、`article-collector recommend qiita --query "Rust tag:rust" --limit 10`、`article-collector recommend bluesky --query "atproto rust" --limit 10`、`article-collector recommend github-search --query "stars:>1000 pushed:>2026-01-01 archived:false" --limit 5` のように `--query` を指定すると、built-in query source の検索条件を上書きできる。X plugin は `[recommend.source.twitter.options]` で mode と query を指定する。`--query` は plugin source へ渡さず、`all` や URL fallback では使用しない。
+候補一覧の出力と翻訳済み記事は SQLite の既読履歴に記録する。履歴 DB は既定で
+ユーザー設定ディレクトリ配下の `article-collector/recommend-history.sqlite` にあり、
+`[recommend].history_path` で場所を変更できる。候補が見つからない場合や全候補が
+既読の場合は非ゼロで終了する。
 
-`article-collector recommend all --limit 30` は registry で recommend source が設定された built-in site と、install 済み plugin source から、それぞれ最大30件ずつ取得して 1 つの `raw.json` にまとめる。現在の built-in 対象は `hackernews`, `devto`, `zenn`, `qiita`, `bluesky`, `arxiv`, `github-advisory`, `cisa-kev`, `nvd`, `aws-whatsnew`, `aws-security`, `google-cloud-blog`, `kubernetes`, `cncf`, `infoq`, `martinfowler`, `github-search`。X を含める場合は plugin を install し、明示的に順序を固定する場合は `twitter` を `[recommend].sources` に追加する。`thoughtworks-radar` は安定した machine-readable feed/API が確認できていないため、`recommend all` には含めず、URL fallback のみ対応する。`article-collector.toml` の `[recommend]` / `[recommend.source.<site>]` で source 順序、enabled、limit、query、記事本文取得を上書きできる。特に `[recommend].sources` に非空の list を書いた場合、`all` でもその list に含まれる source だけを収集する。その後、`ACP_AGENT` が設定されていれば同じ入力を翻訳して `translated.md` を作成する。`[recommend].fetch_articles = true` の `translated.md` は Slack 投稿向けの index になり、記事ごとの URL, Hacker News score/comments などの metadata, summary excerpt, 翻訳ファイル link を含む。`ACP_AGENT` が未設定または空文字の場合、翻訳は skip される。YouTube のチャンネル RSS / API-key 検索は第2弾で扱う。
-
-`recommend` は SQLite の既読履歴で過去に `raw.json` へ出力した記事 URL を管理し、次回以降は同じ記事を `raw.json` に出力しない。`ARTICLE_COLLECTOR_TEMP_DIR` は `raw.json` / `translated.md` / `recommended_articles/` など収集・翻訳中の temporary directory だけを変更し、履歴 DB の場所や最終成果物の保存先は変更しない。履歴 DB は既定ではユーザー設定ディレクトリ配下の `article-collector/recommend-history.sqlite` に作成する。別の場所を使う場合は `[recommend].history_path` を指定する。候補自体が 0 件の場合は `No recommended articles found for <target>`、全候補が既読だった場合は `No new recommended articles found for <target>` で非ゼロ終了する。
-
-SQLite 履歴だけを消して再収集したい場合は `article-collector history clear` を実行する。`--config` を指定すると `[recommend].history_path` の DB を clear する。実行時 artifact もまとめて消す場合は `article-collector history clear all` を実行する。`all` では `ARTICLE_COLLECTOR_TEMP_DIR` または `ARTICLE_COLLECTOR_OUTPUT_DIR` が設定されている場合、その directory 自体と配下ファイルも削除する。環境変数が未設定の場合、既定の temporary directory は削除しない。
+再収集したい場合は `article-collector history clear` を実行する。成果物も削除する
+場合は `--include-artifacts` を追加する。ディレクトリを指定する環境変数が未設定なら、
+既定の一時ディレクトリは削除対象から外れる。
 
 ## 詳細ドキュメント
 
@@ -564,20 +480,21 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-外部サービスへ実アクセスする live test は通常の `cargo test --locked` では skip される。recommend source の実疎通を確認する場合は `cargo test --locked recommend::tests::collects_recommendations_from_every_registered_site -- --ignored --nocapture` を使う。
+CLI の記事取得と候補探索は、`cargo test --locked --test cli` でローカル HTTP
+サーバーを使って検証できる。
 
 Taskfile は Rust CLI の薄いラッパーとして使える:
 
 ```bash
-task fetch URL=https://example.com/article
-task recommend TARGET=hackernews LIMIT=30
-task recommend TARGET=arxiv LIMIT=10 QUERY="cat:cs.CV OR cat:cs.LG"
-task recommend TARGET=all LIMIT=30 CONFIG=article-collector.toml
-task translate
+task collect URL=https://example.com/article
+task collect URL=https://news.ycombinator.com/ DISCOVER=true THROUGH=translate
 task check
 ```
 
 ## リリース
+
+CLI の切り替えにあわせ、バッチやスクリプトは新しい [コマンド一覧](#コマンド一覧)
+に従って更新する。探索の処理範囲は `--through` で指定する。
 
 `main` に push されると `.github/workflows/release.yml` が実行される。
 通常の PR merge では release-plz が Release PR を作成・更新する。Release PR が merge されると workflow が `Cargo.toml` の version から `v<major>.<minor>.<patch>` 形式の tag を解決し、GitHub Release、core binary、`article-collector-x` plugin binary を同じ workflow 内で作成する。5 target の build が成功した後、plugin registry も更新する。

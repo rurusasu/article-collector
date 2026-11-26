@@ -9,28 +9,18 @@ use std::time::{Duration, Instant};
 const GH_BIN_ENV: &str = "ARTICLE_COLLECTOR_GH_BIN";
 const GIT_BIN_ENV: &str = "ARTICLE_COLLECTOR_GIT_BIN";
 
-#[derive(Debug)]
-pub struct PreparedTargetRepo {
-    pub target_dir: PathBuf,
-    pub branch: String,
-}
-
 pub fn target_dir_from_env() -> PathBuf {
     std::env::var("TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| crate::paths::default_target_dir())
 }
 
-pub fn prepare_article_branch() -> Result<PreparedTargetRepo> {
+pub fn prepare_article_branch() -> Result<PathBuf> {
     let target_repo = std::env::var("TARGET_REPO").context("TARGET_REPO env var required")?;
     prepare_article_branch_at(&target_repo, target_dir_from_env(), &gh_program())
 }
 
-fn prepare_article_branch_at(
-    target_repo: &str,
-    target_dir: PathBuf,
-    gh: &str,
-) -> Result<PreparedTargetRepo> {
+fn prepare_article_branch_at(target_repo: &str, target_dir: PathBuf, gh: &str) -> Result<PathBuf> {
     let branch = article_branch_name();
 
     if is_valid_target_repo(&target_dir) {
@@ -44,7 +34,7 @@ fn prepare_article_branch_at(
     }
 
     run_git(&target_dir, &["checkout", "-b", &branch])?;
-    Ok(PreparedTargetRepo { target_dir, branch })
+    Ok(target_dir)
 }
 
 pub fn create_pr_for_path(path: &Path) -> Result<()> {
