@@ -86,10 +86,6 @@ impl PluginSourceCatalog {
         self.sources.get(canonical)
     }
 
-    pub fn recommendable_sources(&self) -> Vec<String> {
-        self.sources.keys().cloned().collect()
-    }
-
     fn insert_source(&mut self, plugin: &InstalledPlugin, source: ManifestSource) -> Result<()> {
         let canonical = source.name.to_ascii_lowercase();
         let mut claimed_names = Vec::with_capacity(source.aliases.len() + 1);
@@ -102,7 +98,12 @@ impl PluginSourceCatalog {
         );
 
         for name in &claimed_names {
-            if sites::site_by_name(name).is_some() {
+            if let Some(site) = sites::site_by_name(name)
+                && !(site.name == "twitter"
+                    && site.discovery.is_none()
+                    && plugin.name == "x"
+                    && canonical == "twitter")
+            {
                 bail!(
                     "Plugin '{}' source name '{}' conflicts with a built-in source",
                     plugin.name,
@@ -249,11 +250,10 @@ mod tests {
 
         assert_eq!(catalog.resolve("example").unwrap().name, "example");
         assert_eq!(catalog.resolve("ex").unwrap().name, "example");
-        assert_eq!(catalog.recommendable_sources(), vec!["example"]);
     }
 
     /// 検証: catalog discoveryは欠損executableを起動時failureとして遅延する
-    /// 理由:無関係なbuilt-in sourceとrecommend allのpartial successを維持するため
+    /// 理由: 無関係な探索ソースに欠損実行ファイルの影響を広げないため
     /// リスク:壊れた1 pluginが全recommendationを停止する
     #[test]
     fn loads_manifest_when_plugin_executable_is_missing() {
@@ -285,6 +285,13 @@ mod tests {
         let error = PluginSourceCatalog::load(&store).unwrap_err();
 
         assert!(error.to_string().contains("hackernews"));
+        assert!(error.to_string().contains("built-in"));
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(temp.path(), &[installed("example-plugin", "twitter", &[])]);
+        let error = PluginSourceCatalog::load(&store).unwrap_err();
+
+        assert!(error.to_string().contains("twitter"));
         assert!(error.to_string().contains("built-in"));
     }
 

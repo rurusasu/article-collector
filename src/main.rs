@@ -17,7 +17,8 @@ mod youtube;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+use url::Url;
 
 #[derive(Parser)]
 #[command(
@@ -32,49 +33,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// 記事取得 → 翻訳 → 保存 → PR（全工程）
-    Collect {
-        /// 取得する記事の URL
-        url: String,
+    /// 記事を収集する
+    Article {
+        #[command(subcommand)]
+        command: ArticleCommands,
     },
-    /// URL から記事を取得
-    Fetch {
-        /// 取得する記事の URL
-        url: String,
-    },
-    /// 取得した記事を翻訳
-    Translate {
-        /// 入力 JSON ファイルパス
-        ///
-        /// 省略すると一時ディレクトリ内の raw.json を読み込みます。
-        /// 一時ディレクトリは環境変数 ARTICLE_COLLECTOR_TEMP_DIR で指定できます。
-        input: Option<PathBuf>,
-    },
-    /// 翻訳記事を target repo の作業ブランチへ保存
-    Save {
-        /// 元記事の URL
-        url: String,
-    },
-    /// 保存済み Markdown を commit / push して PR 作成
-    Pr {
-        /// target repo からの相対 path、または target repo 配下の絶対 path
-        path: PathBuf,
-    },
-    /// 推薦記事/関連リンクをまとめて取得
-    Recommend {
-        /// 推薦記事を探す site 名、all、または起点 URL
-        target: String,
-        /// 収集する最大件数
-        #[arg(short, long)]
-        limit: Option<usize>,
-        /// arXiv など query 対応 source の検索条件
-        #[arg(long)]
-        query: Option<String>,
-        /// article-collector TOML config のパス
-        #[arg(long, value_name = "PATH")]
-        config: Option<PathBuf>,
-    },
-    /// recommend history を管理
+    /// 推薦履歴を管理する
     History {
         #[command(subcommand)]
         command: HistoryCommands,
@@ -87,22 +51,50 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
+enum ArticleCommands {
+    /// URL から記事を取得し、指定した工程まで進める
+    Collect {
+        /// 記事または探索の起点となる HTTP(S) URL
+        #[arg(value_parser = parse_http_url, value_name = "URL")]
+        url: Url,
+        /// 起点 URL から記事候補を探索する
+        #[arg(long)]
+        discover: bool,
+        /// 到達する工程。省略時は記事本文を保存し、--discover 指定時は候補一覧を保存する
+        #[arg(long, value_enum)]
+        through: Option<CollectThrough>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum CollectThrough {
+    /// 記事本文を取得して JSON に保存する
+    Raw,
+    /// 記事を取得・翻訳して Markdown を作成する
+    Translate,
+    /// 翻訳済み記事をリポジトリに配置して PR を作成する（AUTO_MERGE 有効時はマージ）
+    Pr,
+}
+
+#[derive(Subcommand)]
 enum HistoryCommands {
-    /// recommend history と実行時 artifact を clear
+    /// 推薦履歴を削除する
     Clear {
-        /// clear 対象
-        #[arg(value_enum)]
-        scope: Option<HistoryClearScope>,
+        /// 設定された一時・出力ディレクトリも配下のファイルごと削除する
+        #[arg(long)]
+        include_artifacts: bool,
         /// article-collector TOML config のパス
         #[arg(long, value_name = "PATH")]
         config: Option<PathBuf>,
     },
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-enum HistoryClearScope {
-    /// recommend history、env 指定 temp dir、env 指定 output dir を clear
-    All,
+fn parse_http_url(input: &str) -> Result<Url, String> {
+    let url = Url::parse(input).map_err(|error| error.to_string())?;
+    if !matches!(url.scheme(), "http" | "https") || !url.has_host() {
+        return Err("HTTP(S) URL を指定してください".to_string());
+    }
+    Ok(url)
 }
 
 #[tokio::main]
@@ -110,45 +102,22 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Collect { ref url } => {
-            fetch::fetch_url(url).await?;
-            if translate::translate(&paths::raw_json_path()).await?
-                == translate::TranslateOutcome::Translated
-            {
-                let prepared = target_repos::prepare_article_branch()?;
-                let saved = save::save_article_to_target(&prepared.target_dir, url)?;
-                target_repos::create_pr_for_path(&saved.path)?;
-            }
-        }
-        Commands::Fetch { ref url } => {
-            fetch::fetch_url(url).await?;
-        }
-        Commands::Translate { ref input } => {
-            let input = input.clone().unwrap_or_else(paths::raw_json_path);
-            translate::translate(&input).await?;
-        }
-        Commands::Save { ref url } => {
-            let prepared = target_repos::prepare_article_branch()?;
-            let saved = save::save_article_to_target(&prepared.target_dir, url)?;
-            eprintln!(
-                "Saved article on branch {}: {}",
-                prepared.branch,
-                saved.path.display()
-            );
-        }
-        Commands::Pr { ref path } => {
-            target_repos::create_pr_for_path(path)?;
-        }
-        Commands::Recommend {
-            ref target,
-            limit,
-            ref query,
-            ref config,
+        Commands::Article {
+            command:
+                ArticleCommands::Collect {
+                    url,
+                    discover,
+                    through,
+                },
         } => {
-            run_recommend(target, limit, query.as_deref(), config.as_deref()).await?;
+            run_collect(url.as_str(), discover, through).await?;
         }
         Commands::History {
-            command: HistoryCommands::Clear { scope, ref config },
+            command:
+                HistoryCommands::Clear {
+                    include_artifacts,
+                    ref config,
+                },
         } => {
             let app_config = config::load(config.as_deref())?;
             let history_path = recommend::history_path_for_config(&app_config.recommend)?;
@@ -160,7 +129,7 @@ async fn main() -> Result<()> {
                 "Cleared {cleared} recommend history item(s) from {}",
                 history_path.display()
             );
-            if matches!(scope, Some(HistoryClearScope::All)) {
+            if include_artifacts {
                 let cleanup_summary = cleanup::clear_all_artifacts()?;
                 if let Some(path) = cleanup_summary.removed_temp_dir {
                     eprintln!(
@@ -192,40 +161,54 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_recommend(
-    target: &str,
-    limit: Option<usize>,
-    query: Option<&str>,
-    config_path: Option<&Path>,
-) -> Result<()> {
-    let app_config = config::load(config_path)?;
+async fn run_collect(url: &str, discover: bool, through: Option<CollectThrough>) -> Result<()> {
+    if discover {
+        return run_discovery(url, through).await;
+    }
+
+    if matches!(through, None | Some(CollectThrough::Raw)) {
+        return fetch::fetch_url(url).await;
+    }
+
+    let agent = translate::require_acp_agent()?;
+    fetch::fetch_url(url).await?;
+    translate::translate(&paths::raw_json_path(), agent).await?;
+    if through == Some(CollectThrough::Pr) {
+        let target_dir = target_repos::prepare_article_branch()?;
+        let saved = save::save_article_to_target(&target_dir, url)?;
+        target_repos::create_pr_for_path(&saved.path)?;
+    }
+    Ok(())
+}
+
+async fn run_discovery(url: &str, through: Option<CollectThrough>) -> Result<()> {
+    let output = match through {
+        None => recommend::RecommendationOutput::Candidates,
+        Some(CollectThrough::Raw) => recommend::RecommendationOutput::Raw,
+        Some(CollectThrough::Translate | CollectThrough::Pr) => {
+            translate::require_acp_agent()?;
+            recommend::RecommendationOutput::Translated
+        }
+    };
+    let app_config = config::load(None)?;
     let logger = logging::stderr_logger().new(slog::o!(
         "command" => "recommend".to_string(),
-        "target" => target.to_owned(),
+        "target" => url.to_owned(),
     ));
-    let collection = recommend::collect_recommended_with_logger(
-        target,
-        limit,
-        query,
-        &app_config.recommend,
-        &logger,
-    )
-    .await?;
-    if collection.translation_required {
-        translate::translate(&collection.raw_path).await?;
-    }
-    if app_config.recommend.create_pr {
-        ensure_recommend_pr_has_articles(&collection)?;
-        let prepared = target_repos::prepare_article_branch()?;
+    let collection =
+        recommend::collect_recommended_with_logger(url, &app_config.recommend, &logger, output)
+            .await?;
+    if through == Some(CollectThrough::Pr) {
+        let target_dir = target_repos::prepare_article_branch()?;
         let saved_articles = save::save_recommended_articles_to_target(
-            &prepared.target_dir,
+            &target_dir,
             &collection.translated_articles,
         )?;
         let saved_paths = saved_articles
             .iter()
             .map(|article| article.path.clone())
             .collect::<Vec<_>>();
-        let pr_title = recommend_pr_title(target, saved_articles.len());
+        let pr_title = recommend_pr_title(url, saved_articles.len());
         let pr_body = recommend_pr_body(&saved_articles);
         target_repos::create_pr_for_paths(&saved_paths, &pr_title, &pr_title, &pr_body)?;
     }
@@ -246,15 +229,6 @@ fn recommend_pr_body(saved_articles: &[save::SavedArticle]) -> String {
         ));
     }
     lines.join("\n")
-}
-
-fn ensure_recommend_pr_has_articles(
-    collection: &recommend::RecommendationCollection,
-) -> Result<()> {
-    if collection.translated_articles.is_empty() {
-        anyhow::bail!("No translated recommended articles available for PR creation");
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -285,31 +259,14 @@ mod tests {
 
     #[test]
     fn recommend_pr_title_uses_singular_and_plural_nouns() {
+        let seed = "https://example.com/articles";
         assert_eq!(
-            recommend_pr_title("hackernews", 1),
-            "recommend: collect 1 article from hackernews"
+            recommend_pr_title(seed, 1),
+            "recommend: collect 1 article from https://example.com/articles"
         );
         assert_eq!(
-            recommend_pr_title("all", 2),
-            "recommend: collect 2 articles from all"
-        );
-    }
-
-    #[test]
-    fn recommend_pr_requires_translated_articles_before_target_repo_side_effects() {
-        let collection = recommend::RecommendationCollection {
-            item_count: 0,
-            source_count: 1,
-            raw_path: PathBuf::from("raw.json"),
-            translation_required: false,
-            translated_articles: Vec::new(),
-        };
-
-        let error = ensure_recommend_pr_has_articles(&collection).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "No translated recommended articles available for PR creation"
+            recommend_pr_title(seed, 2),
+            "recommend: collect 2 articles from https://example.com/articles"
         );
     }
 }

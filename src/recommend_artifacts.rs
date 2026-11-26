@@ -100,7 +100,7 @@ pub fn write_translated_index(
     let mut lines = vec![
         "# Recommended Articles".to_string(),
         String::new(),
-        format!("Generated from `recommend {target}` with `[recommend].fetch_articles = true`."),
+        format!("Generated from `{target}`."),
         String::new(),
         "## Articles".to_string(),
         String::new(),
@@ -375,15 +375,11 @@ mod tests {
             ),
         }];
 
-        write_translated_index(&outdir, "all", &artifacts, true).unwrap();
+        write_translated_index(&outdir, "https://news.ycombinator.com/", &artifacts, true).unwrap();
 
         let index = fs::read_to_string(outdir.join("translated.md")).unwrap();
         assert!(index.contains("# Recommended Articles"));
-        assert!(
-            index.contains(
-                "Generated from `recommend all` with `[recommend].fetch_articles = true`."
-            )
-        );
+        assert!(index.contains("Generated from `https://news.ycombinator.com/`."));
         assert!(index.contains("1. Example Article"));
         assert!(index.contains(
             "Translation: recommended_articles/001-hackernews-example-article_translated.md"

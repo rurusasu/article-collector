@@ -63,6 +63,7 @@ pub fn discovery_endpoint_for_url(url: &str) -> Option<&'static DiscoveryEndpoin
         .and_then(|site| site.discovery.as_ref())
 }
 
+#[cfg(test)]
 pub fn recommendable_site_names() -> Vec<&'static str> {
     recommendable_sites()
         .into_iter()

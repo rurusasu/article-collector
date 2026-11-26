@@ -16,23 +16,12 @@ const DEFAULT_TRANSLATION_TIMEOUT_SECS: u64 = 600;
 const TRANSLATION_RETRY_COUNT: usize = 1;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum TranslateOutcome {
-    Translated,
-    Skipped,
-}
-
-#[derive(Debug, PartialEq, Eq)]
 pub enum TranslateContentOutcome {
     Translated(String),
     Skipped,
 }
 
-pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
-    let Some(agent) = acp_agent_from_env()? else {
-        eprintln!("Error: ACP_AGENT is not set. Translation skipped.");
-        return Ok(TranslateOutcome::Skipped);
-    };
-
+pub async fn translate(input: &Path, agent: AcpAgent) -> Result<()> {
     let lang = std::env::var("TRANSLATE_LANG").unwrap_or_else(|_| "ja".to_string());
     let mut translator = AcpTranslator::spawn(agent, lang).await?;
 
@@ -74,7 +63,7 @@ pub async fn translate(input: &Path) -> Result<TranslateOutcome> {
     }
 
     eprintln!("Translation complete");
-    Ok(TranslateOutcome::Translated)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -366,7 +355,7 @@ impl AcpTranslator<AcpJsonRpcClient> {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum AcpAgent {
+pub(crate) enum AcpAgent {
     Codex,
     Gemini,
     Claude,
@@ -417,6 +406,10 @@ impl AcpAgentCommand {
             .collect::<Vec<_>>()
             .join(" ")
     }
+}
+
+pub(crate) fn require_acp_agent() -> Result<AcpAgent> {
+    acp_agent_from_env()?.context("Set ACP_AGENT to translate the article")
 }
 
 fn acp_agent_from_env() -> Result<Option<AcpAgent>> {

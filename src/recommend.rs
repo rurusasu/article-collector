@@ -28,7 +28,7 @@ use crate::plugins::sources::{
 use crate::plugins::state::InstalledPluginStore;
 use crate::sites::{
     self,
-    types::{CatalogRequest, JsonRequest, SearchRequest, Site},
+    types::{CatalogRequest, JsonRequest, SearchRequest},
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,7 +69,6 @@ struct GenericFeedItem {
 }
 
 enum RecommendationTarget<'a> {
-    AllSources,
     BuiltIn {
         site_name: &'static str,
         endpoint: DiscoveryEndpoint,
@@ -84,7 +83,6 @@ enum RecommendationTarget<'a> {
 
 const MAX_LIMIT: usize = 100;
 const DEFAULT_LIMIT: usize = 30;
-const ALL_TARGET: &str = "all";
 const USER_AGENT: &str = concat!("article-collector/", env!("CARGO_PKG_VERSION"));
 const RECOMMEND_FETCH_CONCURRENCY: usize = 6;
 const RECOMMEND_TRANSLATION_CONCURRENCY: usize = 2;
@@ -141,70 +139,53 @@ pub struct TranslatedRecommendedArticle {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct RecommendationCollection {
-    pub item_count: usize,
-    pub source_count: usize,
-    pub raw_path: PathBuf,
-    pub translation_required: bool,
     pub translated_articles: Vec<TranslatedRecommendedArticle>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RecommendationOutput {
+    Candidates,
+    Raw,
+    Translated,
 }
 
 pub async fn collect_recommended_with_logger(
     target: &str,
-    limit: Option<usize>,
-    query: Option<&str>,
     config: &RecommendConfig,
     logger: &Logger,
+    output: RecommendationOutput,
 ) -> Result<RecommendationCollection> {
     let store = InstalledPluginStore::new(PluginPaths::system()?);
     let catalog = PluginSourceCatalog::load(&store)?;
-    collect_recommended_with_plugins(
-        target,
-        limit,
-        query,
-        config,
-        logger,
-        &catalog,
-        &PluginRuntime,
-    )
-    .await
+    collect_recommended_with_plugins(target, config, logger, &catalog, &PluginRuntime, output).await
 }
 
 async fn collect_recommended_with_plugins<C>(
     target: &str,
-    limit: Option<usize>,
-    query: Option<&str>,
     config: &RecommendConfig,
     logger: &Logger,
     catalog: &PluginSourceCatalog,
     collector: &C,
+    output: RecommendationOutput,
 ) -> Result<RecommendationCollection>
 where
     C: PluginSourceCollector + ?Sized,
 {
-    validate_create_pr_config(config)?;
-    let recommendation_target = resolve_recommendation_target(target, catalog)?;
-    let is_all_sources = matches!(&recommendation_target, RecommendationTarget::AllSources);
-    let translation_required = recommendation_target.translation_required();
-    let source_count = source_count_for_target(target, config, catalog)?;
-    let mut items = match recommendation_target {
-        RecommendationTarget::AllSources => {
-            reject_query_override(query)?;
-            collect_all_sources_with_logger(limit, config, logger, catalog, collector).await?
-        }
+    let recommendation_target = resolve_recommendation_target(target, config, catalog)?;
+    let items = match recommendation_target {
         RecommendationTarget::BuiltIn {
             site_name,
             endpoint,
         } => {
-            let plan = source_plan_for_parts(site_name, endpoint, limit, query, config)?;
-            collect_source_plan(&plan, collector).await?
+            let plan = source_plan_for_parts(site_name, endpoint, config)?;
+            collect_source_plan(&plan, collector, logger).await?
         }
         RecommendationTarget::Plugin { source } => {
-            let plan = source_plan_for_plugin(&source, limit, query, config)?;
-            collect_source_plan(&plan, collector).await?
+            let plan = source_plan_for_plugin(&source, config)?;
+            collect_source_plan(&plan, collector, logger).await?
         }
         RecommendationTarget::PageLinks { url } => {
-            reject_query_override(query)?;
-            let limit = effective_limit(limit, config.limit, None)?;
+            let limit = effective_limit(config.limit, None, None)?;
             collect_page_links(url, "generic-web", None, limit).await?
         }
     };
@@ -216,21 +197,18 @@ where
     let dedup_outcome = history.filter_new_items(items)?;
     let skipped_seen = dedup_outcome.skipped_seen;
     let skipped_invalid = dedup_outcome.skipped_invalid;
-    items = dedup_outcome.items;
+    let items = dedup_outcome.items;
 
     ensure_new_recommendations(target, &items)?;
-    if is_all_sources {
-        log_source_counts_summary(logger, "recommend_new_items_by_source", &items);
-    }
 
-    if config.fetch_articles {
+    if output != RecommendationOutput::Candidates {
         return collect_recommended_articles(
             target,
             items,
             history,
             skipped_seen,
             skipped_invalid,
-            source_count,
+            output == RecommendationOutput::Translated,
         )
         .await;
     }
@@ -250,62 +228,47 @@ where
         recorded_count
     );
     Ok(RecommendationCollection {
-        item_count: items.len(),
-        source_count,
-        raw_path,
-        translation_required,
         translated_articles: Vec::new(),
     })
 }
 
 fn resolve_recommendation_target<'a>(
     target: &'a str,
+    config: &RecommendConfig,
     catalog: &PluginSourceCatalog,
 ) -> Result<RecommendationTarget<'a>> {
-    if is_all_target(target) {
-        if planner::recommendable_sites().is_empty() {
-            bail!("No recommendation sources configured");
-        }
-        return Ok(RecommendationTarget::AllSources);
-    }
-
-    if let Some(site) = sites::site_by_name(target) {
-        if let Some(endpoint) = site.discovery {
-            return Ok(RecommendationTarget::BuiltIn {
-                site_name: site.name,
-                endpoint,
-            });
-        }
-        if let Some(source) = catalog.resolve(target) {
-            return Ok(RecommendationTarget::Plugin {
-                source: Box::new(source.clone()),
-            });
-        }
-        bail!(
-            "No discovery endpoint configured for site '{}'. Install the '{}' plugin or use one of: {}, {}",
-            site.name,
-            site.aliases.first().copied().unwrap_or(site.name),
-            ALL_TARGET,
-            sites::recommendable_site_names().join(", ")
-        );
-    }
-
-    if let Some(source) = catalog.resolve(target) {
+    let url = Url::parse(target)
+        .ok()
+        .filter(|url| matches!(url.scheme(), "http" | "https") && url.host_str().is_some())
+        .with_context(|| {
+            format!(
+                "Invalid HTTP(S) URL: {target}. Supported URL examples: {}",
+                sites::supported_url_examples().join(", ")
+            )
+        })?;
+    if url.port().is_none()
+        && url.path() == "/"
+        && matches!(
+            url.host_str(),
+            Some("x.com" | "www.x.com" | "twitter.com" | "www.twitter.com")
+        )
+        && let Some(source) = catalog.resolve("twitter")
+    {
         return Ok(RecommendationTarget::Plugin {
             source: Box::new(source.clone()),
         });
     }
 
-    if fetch::validate_url(target).is_err() {
-        bail!(
-            "Unknown site or invalid URL: {target}. Use one of: {}, {}. Supported URL examples: {}",
-            ALL_TARGET,
-            sites::recommendable_site_names().join(", "),
-            sites::supported_url_examples().join(", ")
-        );
-    }
-
-    if let Some(endpoint) = planner::endpoint_for_url(target) {
+    if let Some((site_name, endpoint)) = configured_discovery_endpoint(&url) {
+        Ok(RecommendationTarget::BuiltIn {
+            site_name,
+            endpoint,
+        })
+    } else if url.host_str() == Some("news.ycombinator.com")
+        && url.port().is_none()
+        && url.path() == "/item"
+        && let Some(endpoint) = planner::endpoint_for_url(target)
+    {
         let site_name = sites::SITES
             .iter()
             .find(|site| site.discovery.as_ref() == Some(endpoint))
@@ -315,31 +278,67 @@ fn resolve_recommendation_target<'a>(
             site_name,
             endpoint: *endpoint,
         })
+    } else if let Some(source) = configured_plugin_source(&url, config, catalog)? {
+        Ok(RecommendationTarget::Plugin {
+            source: Box::new(source.clone()),
+        })
     } else {
         Ok(RecommendationTarget::PageLinks { url: target })
     }
 }
 
-impl RecommendationTarget<'_> {
-    fn translation_required(&self) -> bool {
-        matches!(self, Self::AllSources)
-    }
-}
-
-fn is_all_target(target: &str) -> bool {
-    target.trim().eq_ignore_ascii_case(ALL_TARGET)
-}
-
-fn source_count_for_target(
-    target: &str,
+fn configured_plugin_source<'a>(
+    url: &Url,
     config: &RecommendConfig,
-    catalog: &PluginSourceCatalog,
-) -> Result<usize> {
-    Ok(match resolve_recommendation_target(target, catalog)? {
-        RecommendationTarget::AllSources => source_plans_for_all(None, config, catalog)?.len(),
-        RecommendationTarget::BuiltIn { .. }
-        | RecommendationTarget::Plugin { .. }
-        | RecommendationTarget::PageLinks { .. } => 1,
+    catalog: &'a PluginSourceCatalog,
+) -> Result<Option<&'a PluginSource>> {
+    let mut matched_source = None;
+    for (name, settings) in &config.source {
+        let Some(seed_url) = &settings.seed_url else {
+            continue;
+        };
+        let seed = Url::parse(seed_url)
+            .ok()
+            .filter(|seed| matches!(seed.scheme(), "http" | "https") && seed.has_host())
+            .with_context(|| format!("Invalid HTTP(S) seed_url for plugin source '{name}'"))?;
+        if seed != *url {
+            continue;
+        }
+        if matched_source.is_some() {
+            bail!("Several plugin sources configure the same seed URL: {url}");
+        }
+        matched_source = Some(
+            catalog
+                .resolve(name)
+                .filter(|source| source.name == *name)
+                .with_context(|| format!("No installed plugin source named '{name}'"))?,
+        );
+    }
+    Ok(matched_source)
+}
+
+fn configured_discovery_endpoint(url: &Url) -> Option<(&'static str, DiscoveryEndpoint)> {
+    if url.host_str() == Some("news.ycombinator.com") && url.port().is_none() && url.path() == "/" {
+        let site = &sites::hackernews::SITE;
+        return site.discovery.map(|endpoint| (site.name, endpoint));
+    }
+
+    planner::recommendable_sites().into_iter().find_map(|site| {
+        let endpoint = planner::endpoint_for_site(site)?;
+        let configured_url = match endpoint {
+            DiscoveryEndpoint::RssFeed { feed_url } | DiscoveryEndpoint::AtomFeed { feed_url } => {
+                feed_url
+            }
+            DiscoveryEndpoint::JsonApi { api_url, .. }
+            | DiscoveryEndpoint::SearchApi { api_url, .. } => api_url,
+            DiscoveryEndpoint::CatalogApi { catalog_url, .. } => catalog_url,
+            DiscoveryEndpoint::PageLinks => return None,
+        };
+        let configured = Url::parse(configured_url).ok()?;
+        (configured.host_str() == url.host_str()
+            && configured.port() == url.port()
+            && configured.path() == url.path())
+        .then_some((site.name, endpoint))
     })
 }
 
@@ -371,7 +370,7 @@ async fn collect_recommended_articles(
     mut history: RecommendationHistory,
     skipped_seen: usize,
     skipped_invalid: usize,
-    source_count: usize,
+    translate_articles: bool,
 ) -> Result<RecommendationCollection> {
     let outdir = paths::temp_dir();
     let articles_dir = paths::recommended_articles_dir();
@@ -379,16 +378,16 @@ async fn collect_recommended_articles(
 
     let tasks = recommended_article_tasks(items);
     let task_count = tasks.len();
-    let mut translated_items = Vec::new();
-    let translation_configured = translation_agent_configured();
-
     let (fetched_articles, mut failures) = fetch_recommended_articles_ordered_with(
         tasks,
         articles_dir.clone(),
         RECOMMEND_FETCH_CONCURRENCY,
         |url| async move {
             let values = fetch::fetch_url_items(&url).await?;
-            Ok(values.into_iter().next().unwrap_or(Value::Null))
+            values
+                .into_iter()
+                .next()
+                .with_context(|| format!("No article body returned for {url}"))
         },
     )
     .await?;
@@ -396,27 +395,84 @@ async fn collect_recommended_articles(
         .iter()
         .map(|article| article.item.clone())
         .collect::<Vec<_>>();
+    let artifacts = if translate_articles {
+        translate_recommended_articles(fetched_articles, task_count, &articles_dir, &mut failures)
+            .await?
+    } else {
+        Vec::new()
+    };
+
+    let failure_path = paths::recommend_fetch_failures_path();
+    debug_assert_eq!(
+        failure_path,
+        outdir.join("recommend-fetch-failures.json"),
+        "failure artifact path helper should stay aligned with artifact writer"
+    );
+    let failures = ordered_failures(failures);
+    recommend_artifacts::write_failure_artifact(&outdir, &failures)?;
+    if fetched_items.is_empty() {
+        bail!("No recommended article bodies fetched for {target}");
+    }
+
+    let translated_articles = translated_recommended_articles_from_artifacts(&artifacts);
+    if translate_articles {
+        if translated_articles.is_empty() {
+            bail!("No recommended articles translated for {target}");
+        }
+        recommend_artifacts::write_translated_index(
+            &outdir,
+            target,
+            &artifacts,
+            !failures.is_empty(),
+        )?;
+    }
+
+    let raw_path = paths::raw_json_path();
+    fs::write(&raw_path, serde_json::to_string_pretty(&fetched_items)?)?;
+    // A body-only run leaves articles eligible for a later translation run.
+    let recorded_count = if translate_articles {
+        let translated_items = translated_articles
+            .iter()
+            .map(|article| article.item.clone())
+            .collect::<Vec<_>>();
+        history.record_seen_items(&translated_items)?
+    } else {
+        0
+    };
+
+    eprintln!(
+        "Recommended article artifacts collected: {} fetched, {} translated -> {} ({} seen skipped, {} invalid skipped, {} recorded)",
+        fetched_items.len(),
+        translated_articles.len(),
+        raw_path.display(),
+        skipped_seen,
+        skipped_invalid,
+        recorded_count
+    );
+
+    Ok(RecommendationCollection {
+        translated_articles,
+    })
+}
+
+async fn translate_recommended_articles(
+    fetched_articles: Vec<FetchedRecommendedArticle>,
+    task_count: usize,
+    articles_dir: &Path,
+    failures: &mut Vec<IndexedArticleFailure>,
+) -> Result<Vec<recommend_artifacts::ArticleArtifact>> {
     let mut artifact_slots = vec![None; task_count];
     let mut pending_translation_articles = Vec::new();
 
     for article in fetched_articles {
-        if translation_configured {
-            if let Some(translated_path) = existing_translation_path(&articles_dir, &article.stem) {
-                translated_items.push(article.item.clone());
-                artifact_slots[article.index] = Some(recommend_artifacts::ArticleArtifact {
-                    item: article.item,
-                    json_path: article.json_path,
-                    translated_path: Some(translated_path),
-                });
-                continue;
-            }
-            pending_translation_articles.push(article);
-        } else {
+        if let Some(translated_path) = existing_translation_path(articles_dir, &article.stem) {
             artifact_slots[article.index] = Some(recommend_artifacts::ArticleArtifact {
                 item: article.item,
                 json_path: article.json_path,
-                translated_path: None,
+                translated_path: Some(translated_path),
             });
+        } else {
+            pending_translation_articles.push(article);
         }
     }
 
@@ -437,7 +493,6 @@ async fn collect_recommended_articles(
             Ok(translate::TranslateContentOutcome::Translated(markdown)) => {
                 let path = articles_dir.join(format!("{}_translated.md", article.stem));
                 fs::write(&path, markdown)?;
-                translated_items.push(article.item.clone());
                 Some(path)
             }
             Ok(translate::TranslateContentOutcome::Skipped) => None,
@@ -461,49 +516,7 @@ async fn collect_recommended_articles(
             translated_path,
         });
     }
-    let artifacts = artifact_slots.into_iter().flatten().collect::<Vec<_>>();
-
-    let failure_path = paths::recommend_fetch_failures_path();
-    debug_assert_eq!(
-        failure_path,
-        outdir.join("recommend-fetch-failures.json"),
-        "failure artifact path helper should stay aligned with artifact writer"
-    );
-    let failures = ordered_failures(failures);
-    recommend_artifacts::write_failure_artifact(&outdir, &failures)?;
-    ensure_fetch_articles_success(target, translation_configured, translated_items.len())?;
-
-    if translation_configured {
-        recommend_artifacts::write_translated_index(
-            &outdir,
-            target,
-            &artifacts,
-            !failures.is_empty(),
-        )?;
-    }
-
-    let raw_path = paths::raw_json_path();
-    fs::write(&raw_path, serde_json::to_string_pretty(&fetched_items)?)?;
-    let seen_items = seen_items_for_fetch_articles(&translated_items, &fetched_items);
-    let recorded_count = history.record_seen_items(&seen_items)?;
-
-    eprintln!(
-        "Recommended article artifacts collected: {} fetched, {} translated -> {} ({} seen skipped, {} invalid skipped, {} recorded)",
-        fetched_items.len(),
-        translated_items.len(),
-        raw_path.display(),
-        skipped_seen,
-        skipped_invalid,
-        recorded_count
-    );
-
-    Ok(RecommendationCollection {
-        item_count: fetched_items.len(),
-        source_count,
-        raw_path,
-        translation_required: false,
-        translated_articles: translated_recommended_articles_from_artifacts(&artifacts),
-    })
+    Ok(artifact_slots.into_iter().flatten().collect())
 }
 
 fn recommended_article_tasks(items: Vec<Value>) -> Vec<RecommendedArticleTask> {
@@ -733,13 +746,6 @@ fn ordered_failures(
         .collect()
 }
 
-fn seen_items_for_fetch_articles(
-    translated_items: &[Value],
-    _fetched_items: &[Value],
-) -> Vec<Value> {
-    translated_items.to_vec()
-}
-
 fn translated_recommended_articles_from_artifacts(
     artifacts: &[recommend_artifacts::ArticleArtifact],
 ) -> Vec<TranslatedRecommendedArticle> {
@@ -755,24 +761,6 @@ fn translated_recommended_articles_from_artifacts(
                 })
         })
         .collect()
-}
-
-fn ensure_fetch_articles_success(
-    target: &str,
-    translation_was_attempted: bool,
-    translated_count: usize,
-) -> Result<()> {
-    if translation_was_attempted && translated_count == 0 {
-        bail!("No recommended articles translated for {target}");
-    }
-    Ok(())
-}
-
-fn validate_create_pr_config(config: &RecommendConfig) -> Result<()> {
-    if config.create_pr && !config.fetch_articles {
-        bail!("[recommend].create_pr requires [recommend].fetch_articles = true");
-    }
-    Ok(())
 }
 
 fn merge_recommendation_and_article(mut recommendation: Value, fetched: Value) -> Value {
@@ -795,22 +783,9 @@ fn article_body_from_fetched(fetched: &Value) -> String {
         .to_string()
 }
 
-fn translation_agent_configured() -> bool {
-    std::env::var("ACP_AGENT").is_ok_and(|agent| !agent.trim().is_empty())
-}
-
 fn validate_limit(limit: usize) -> Result<()> {
     if !(1..=MAX_LIMIT).contains(&limit) {
         bail!("limit must be between 1 and {MAX_LIMIT}");
-    }
-    Ok(())
-}
-
-fn reject_query_override(query: Option<&str>) -> Result<()> {
-    if query.is_some_and(|query| !query.trim().is_empty()) {
-        bail!(
-            "--query is only supported for queryable recommendation sources such as arxiv, nvd, and github-search"
-        );
     }
     Ok(())
 }
@@ -2317,41 +2292,6 @@ fn normalize_arxiv_url(url: &str) -> String {
         .unwrap_or_else(|| url.trim().to_string())
 }
 
-async fn collect_all_sources_with_logger<C>(
-    limit: Option<usize>,
-    config: &RecommendConfig,
-    logger: &Logger,
-    catalog: &PluginSourceCatalog,
-    collector: &C,
-) -> Result<Vec<Value>>
-where
-    C: PluginSourceCollector + ?Sized,
-{
-    let source_plans = source_plans_for_all(limit, config, catalog)?;
-    let mut items = Vec::new();
-    let mut failures = Vec::new();
-
-    info!(logger, "recommend_all_start"; "source_count" => source_plans.len());
-    for plan in source_plans {
-        log_source_collection_start(logger, &plan);
-        let result = collect_source_plan(&plan, collector)
-            .await
-            .with_context(|| {
-                format!(
-                    "Failed to collect recommended articles for source '{}'",
-                    plan.name
-                )
-            });
-        handle_source_collection_result(logger, &plan, result, &mut items, &mut failures);
-    }
-
-    if !failures.is_empty() {
-        log_source_failures_summary(logger, &failures);
-    }
-    log_source_counts_summary(logger, "recommend_all_candidate_counts_by_source", &items);
-    Ok(items)
-}
-
 fn log_source_collection_start(logger: &Logger, plan: &SourcePlan) {
     match plan
         .query
@@ -2378,18 +2318,12 @@ fn log_source_collection_start(logger: &Logger, plan: &SourcePlan) {
     }
 }
 
-fn log_source_collection_complete(
-    logger: &Logger,
-    plan: &SourcePlan,
-    item_count: usize,
-    total_count: usize,
-) {
+fn log_source_collection_complete(logger: &Logger, plan: &SourcePlan, item_count: usize) {
     info!(
         logger,
         "recommend_source_complete";
         "source" => plan.name.as_str(),
         "item_count" => item_count,
-        "total_item_count" => total_count,
     );
 }
 
@@ -2421,166 +2355,12 @@ fn log_source_collection_failed(logger: &Logger, plan: &SourcePlan, error: &str)
     }
 }
 
-fn log_source_failures_summary(logger: &Logger, failures: &[String]) {
-    warn!(
-        logger,
-        "recommend_all_source_failures";
-        "failure_count" => failures.len(),
-        "failures" => failures.join("; "),
-    );
-}
-
-fn handle_source_collection_result(
-    logger: &Logger,
-    plan: &SourcePlan,
-    result: Result<Vec<Value>>,
-    items: &mut Vec<Value>,
-    failures: &mut Vec<String>,
-) {
-    match result {
-        Ok(mut site_items) if !site_items.is_empty() => {
-            let source_item_count = site_items.len();
-            let total_count = items.len() + source_item_count;
-            log_source_collection_complete(logger, plan, source_item_count, total_count);
-            items.append(&mut site_items);
-        }
-        Ok(_) => {
-            let error = format!("No recommended articles found for source '{}'", plan.name);
-            log_source_collection_failed(logger, plan, &error);
-            failures.push(format!("{}: {}", plan.name, error));
-        }
-        Err(error) => {
-            let error = format!("{error:#}");
-            log_source_collection_failed(logger, plan, &error);
-            failures.push(format!("{}: {}", plan.name, error));
-        }
-    }
-}
-
-fn log_source_counts_summary(logger: &Logger, message: &'static str, items: &[Value]) {
-    let counts = source_counts_for_items(items);
-    let source_count = counts.len();
-    let source_counts = format_source_counts(&counts);
-    info!(
-        logger,
-        "{}", message;
-        "source_counts" => source_counts,
-        "source_count" => source_count,
-        "item_count" => items.len(),
-    );
-}
-
-fn format_source_counts(counts: &[(String, usize)]) -> String {
-    if counts.is_empty() {
-        return "none".to_string();
-    }
-
-    counts
-        .iter()
-        .map(|(source, count)| format!("{source}={count}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn source_counts_for_items(items: &[Value]) -> Vec<(String, usize)> {
-    let mut indexes: HashMap<String, usize> = HashMap::new();
-    let mut counts: Vec<(String, usize)> = Vec::new();
-
-    for item in items {
-        let source = item
-            .get("site")
-            .or_else(|| item.get("source"))
-            .and_then(Value::as_str)
-            .filter(|source| !source.trim().is_empty())
-            .unwrap_or("unknown")
-            .to_string();
-
-        if let Some(index) = indexes.get(&source).copied() {
-            counts[index].1 += 1;
-        } else {
-            indexes.insert(source.clone(), counts.len());
-            counts.push((source, 1));
-        }
-    }
-
-    counts
-}
-
-fn source_plans_for_all(
-    cli_limit: Option<usize>,
-    config: &RecommendConfig,
-    catalog: &PluginSourceCatalog,
-) -> Result<Vec<SourcePlan>> {
-    let mut plans = Vec::new();
-    if let Some(source_names) = config.sources.as_ref().filter(|names| !names.is_empty()) {
-        for name in source_names {
-            if let Some(site) = sites::site_by_name(name) {
-                if !source_enabled(site.name, config) {
-                    continue;
-                }
-                let endpoint = planner::endpoint_for_site(site).with_context(|| {
-                    format!("No discovery endpoint configured for site '{name}'")
-                })?;
-                let plan = source_plan_for_parts(site.name, endpoint, cli_limit, None, config)?;
-                plans.push(plan);
-            } else if let Some(source) = catalog.resolve(name) {
-                if !source_enabled(&source.name, config) {
-                    continue;
-                }
-                let plan = source_plan_for_plugin(source, cli_limit, None, config)?;
-                plans.push(plan);
-            } else {
-                bail!("Unknown recommendation source in config: {name}");
-            }
-        }
-    } else {
-        for site in planner::recommendable_sites() {
-            if !source_enabled(site.name, config) {
-                continue;
-            }
-            let plan = source_plan_for_site(site, cli_limit, None, config)?;
-            plans.push(plan);
-        }
-        for name in catalog.recommendable_sources() {
-            let source = catalog
-                .resolve(&name)
-                .expect("catalog canonical source resolves");
-            if !source_enabled(&source.name, config) {
-                continue;
-            }
-            let plan = source_plan_for_plugin(source, cli_limit, None, config)?;
-            plans.push(plan);
-        }
-    }
-    if plans.is_empty() {
-        bail!("No enabled recommendation sources configured");
-    }
-    Ok(plans)
-}
-
-fn source_enabled(name: &str, config: &RecommendConfig) -> bool {
-    source_config_for(name, config).and_then(|source| source.enabled) != Some(false)
-}
-
-fn source_plan_for_site(
-    site: &'static Site,
-    cli_limit: Option<usize>,
-    cli_query: Option<&str>,
-    config: &RecommendConfig,
-) -> Result<SourcePlan> {
-    let endpoint = planner::endpoint_for_site(site)
-        .context("recommendable site must have a discovery endpoint")?;
-    source_plan_for_parts(site.name, endpoint, cli_limit, cli_query, config)
-}
-
 fn source_plan_for_parts(
     site_name: &'static str,
     endpoint: DiscoveryEndpoint,
-    cli_limit: Option<usize>,
-    cli_query: Option<&str>,
     config: &RecommendConfig,
 ) -> Result<SourcePlan> {
-    let source_config = source_config_for(site_name, config);
+    let source_config = source_config_for(site_name, config)?;
     if source_config
         .and_then(|source| source.options.as_ref())
         .is_some()
@@ -2588,13 +2368,11 @@ fn source_plan_for_parts(
         bail!("Plugin options are not supported for built-in source '{site_name}'");
     }
     let source_limit = source_config.and_then(|source| source.limit);
-    let query = effective_query(cli_query, source_config);
-    let limit = effective_source_limit(
-        cli_limit,
-        config.limit,
-        source_limit,
-        endpoint.default_limit(),
-    )?;
+    let query = configured_query(source_config);
+    if query.is_some() && !endpoint.supports_query() {
+        bail!("Query configuration is not supported for source '{site_name}'");
+    }
+    let limit = effective_limit(config.limit, source_limit, endpoint.default_limit())?;
 
     Ok(SourcePlan {
         name: site_name.to_string(),
@@ -2603,32 +2381,23 @@ fn source_plan_for_parts(
             endpoint,
         },
         limit,
-        query,
+        query: query.map(ToOwned::to_owned),
         options: None,
     })
 }
 
-fn source_plan_for_plugin(
-    source: &PluginSource,
-    cli_limit: Option<usize>,
-    cli_query: Option<&str>,
-    config: &RecommendConfig,
-) -> Result<SourcePlan> {
-    reject_query_override(cli_query)?;
-    let source_config = source_config_for(&source.name, config);
-    if source_config
-        .and_then(|config| config.query.as_deref())
-        .is_some_and(|query| !query.trim().is_empty())
-    {
+fn source_plan_for_plugin(source: &PluginSource, config: &RecommendConfig) -> Result<SourcePlan> {
+    let source_config = source_config_for(&source.name, config)?;
+    if configured_query(source_config).is_some() {
         bail!(
-            "--query is not supported for plugin source '{}'",
+            "Query configuration is not supported for plugin source '{}'",
             source.name
         );
     }
     let limit = effective_limit(
-        cli_limit,
         config.limit,
         source_config.and_then(|config| config.limit),
+        None,
     )?;
     let options = source_config.and_then(|config| config.options.clone());
     source.validate_options(options.as_ref())?;
@@ -2644,46 +2413,31 @@ fn source_plan_for_plugin(
 fn source_config_for<'a>(
     site_name: &str,
     config: &'a RecommendConfig,
-) -> Option<&'a RecommendSiteConfig> {
-    config.source.get(site_name)
+) -> Result<Option<&'a RecommendSiteConfig>> {
+    let source = config.source.get(site_name);
+    if source.and_then(|source| source.enabled) == Some(false) {
+        bail!("Recommendation source '{site_name}' is disabled");
+    }
+    Ok(source)
+}
+
+fn configured_query(config: Option<&RecommendSiteConfig>) -> Option<&str> {
+    config
+        .and_then(|config| config.query.as_deref())
+        .filter(|query| !query.trim().is_empty())
 }
 
 fn effective_limit(
-    cli_limit: Option<usize>,
-    config_limit: Option<usize>,
-    source_limit: Option<usize>,
-) -> Result<usize> {
-    effective_source_limit(cli_limit, config_limit, source_limit, None)
-}
-
-fn effective_source_limit(
-    cli_limit: Option<usize>,
     config_limit: Option<usize>,
     source_limit: Option<usize>,
     source_default_limit: Option<usize>,
 ) -> Result<usize> {
-    let limit = cli_limit
-        .or(source_limit)
+    let limit = source_limit
         .or(config_limit)
         .or(source_default_limit)
         .unwrap_or(DEFAULT_LIMIT);
     validate_limit(limit)?;
     Ok(limit)
-}
-
-fn effective_query(
-    cli_query: Option<&str>,
-    source_config: Option<&RecommendSiteConfig>,
-) -> Option<String> {
-    cli_query
-        .filter(|query| !query.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            source_config
-                .and_then(|source| source.query.as_deref())
-                .filter(|query| !query.trim().is_empty())
-                .map(ToOwned::to_owned)
-        })
 }
 
 async fn collect_source(
@@ -2692,10 +2446,6 @@ async fn collect_source(
     limit: usize,
     query: Option<&str>,
 ) -> Result<Vec<Value>> {
-    if !endpoint.supports_query() {
-        reject_query_override(query)?;
-    }
-
     let mut items = match endpoint {
         DiscoveryEndpoint::JsonApi {
             api_url,
@@ -2799,11 +2549,16 @@ async fn collect_source(
     Ok(items)
 }
 
-async fn collect_source_plan<C>(plan: &SourcePlan, collector: &C) -> Result<Vec<Value>>
+async fn collect_source_plan<C>(
+    plan: &SourcePlan,
+    collector: &C,
+    logger: &Logger,
+) -> Result<Vec<Value>>
 where
     C: PluginSourceCollector + ?Sized,
 {
-    match &plan.backend {
+    log_source_collection_start(logger, plan);
+    let result = match &plan.backend {
         SourceBackend::BuiltIn {
             site_name,
             endpoint,
@@ -2811,7 +2566,12 @@ where
         SourceBackend::Plugin(source) => {
             collect_plugin_source(collector, source, plan.limit, plan.options.as_ref()).await
         }
+    };
+    match &result {
+        Ok(items) => log_source_collection_complete(logger, plan, items.len()),
+        Err(error) => log_source_collection_failed(logger, plan, &format!("{error:#}")),
     }
+    result
 }
 
 fn query_override_or_default<'a>(query: Option<&'a str>, default_query: &'a str) -> &'a str {
@@ -2928,10 +2688,9 @@ mod tests {
     use crate::plugins::sources::{PluginSource, PluginSourceCatalog, PluginSourceCollector};
     use crate::plugins::state::InstalledPluginStore;
     use crate::plugins::types::{InstalledPlugin, PluginCandidate};
-    use anyhow::anyhow;
     use async_trait::async_trait;
     use slog::{Drain, KV};
-    use std::collections::{BTreeMap, HashSet};
+    use std::collections::BTreeMap;
     use std::path::PathBuf;
     use std::sync::{
         Arc, Mutex,
@@ -2997,7 +2756,11 @@ mod tests {
         let paths = PluginPaths::from_data_root(temp.path().to_path_buf());
         let store = InstalledPluginStore::new(paths.clone());
         for (source, aliases) in sources {
-            let plugin_name = format!("{source}-plugin");
+            let plugin_name = if *source == "twitter" {
+                "x".to_string()
+            } else {
+                format!("{source}-plugin")
+            };
             let plugin: InstalledPlugin = serde_json::from_value(json!({
                 "schema_version": 1,
                 "registry_revision": 1,
@@ -3035,20 +2798,7 @@ mod tests {
         (temp, catalog)
     }
 
-    #[derive(Default)]
-    struct FakePluginCollector {
-        failing: HashSet<String>,
-        calls: Mutex<Vec<String>>,
-    }
-
-    impl FakePluginCollector {
-        fn failing(source: &str) -> Self {
-            Self {
-                failing: HashSet::from([source.to_string()]),
-                calls: Mutex::default(),
-            }
-        }
-    }
+    struct FakePluginCollector;
 
     #[async_trait]
     impl PluginSourceCollector for FakePluginCollector {
@@ -3058,10 +2808,6 @@ mod tests {
             limit: usize,
             _options: Value,
         ) -> Result<Vec<PluginCandidate>> {
-            self.calls.lock().unwrap().push(source.name.clone());
-            if self.failing.contains(&source.name) {
-                return Err(anyhow!("fixture failure"));
-            }
             Ok((0..limit.min(1))
                 .map(|index| PluginCandidate {
                     title: format!("{} {index}", source.name),
@@ -3074,69 +2820,51 @@ mod tests {
         }
     }
 
-    /// 検証: installed manifest の alias が plugin recommendation target へ解決される
-    /// 理由: source ownership の決定に plugin process 起動を必要としないため
-    /// リスク: alias が未知 URL 扱いになり plugin を利用できない
-    #[test]
-    fn resolves_installed_plugin_source_alias() {
-        let (_temp, catalog) = plugin_catalog(&[("example", &["ex"])]);
-
-        let RecommendationTarget::Plugin { source } =
-            resolve_recommendation_target("ex", &catalog).unwrap()
-        else {
-            panic!("plugin alias should resolve to plugin source");
-        };
-
-        assert_eq!(source.name, "example");
-    }
-
-    /// 検証:明示 plugin source の候補が既存 history・raw 保存 pipeline を通る
-    /// 理由: plugin backend を追加しても後段の重複排除 contract を一本化するため
+    /// 検証: X の起点 URL で公式 plugin の候補が履歴・raw 保存を通る
+    /// 理由: URL 指定で X の取得アダプターと既存の重複排除を使うため
     /// リスク: plugin 候補だけ履歴に記録されず、毎回同じ記事を再処理する
     #[tokio::test]
     async fn explicit_plugin_source_enters_existing_history_pipeline() {
-        let (_temp, catalog) = plugin_catalog(&[("example", &["ex"])]);
-        let collector = FakePluginCollector::default();
+        let (_temp, catalog) = plugin_catalog(&[("twitter", &["x", "x-twitter"])]);
+        let collector = FakePluginCollector;
         let config = RecommendConfig {
+            limit: Some(1),
             history_path: Some(unique_temp_history_path("plugin-source")),
             source: BTreeMap::from([(
-                "example".to_string(),
+                "twitter".to_string(),
                 RecommendSiteConfig {
                     options: Some(toml::from_str("mode = \"latest\"").unwrap()),
                     ..RecommendSiteConfig::default()
                 },
             )]),
-            ..RecommendConfig::default()
         };
         let (logger, _) = test_logger();
 
-        let collection = collect_recommended_with_plugins(
-            "ex",
-            Some(1),
-            None,
+        collect_recommended_with_plugins(
+            "https://x.com/",
             &config,
             &logger,
             &catalog,
             &collector,
+            RecommendationOutput::Candidates,
         )
         .await
         .unwrap();
 
-        assert_eq!(collection.item_count, 1);
-        assert_eq!(collection.source_count, 1);
-        let raw: Value = serde_json::from_slice(&fs::read(&collection.raw_path).unwrap()).unwrap();
-        assert_eq!(raw[0]["source"], "example");
-        assert_eq!(raw[0]["site"], "example");
+        let raw: Value =
+            serde_json::from_slice(&fs::read(paths::raw_json_path()).unwrap()).unwrap();
+        assert_eq!(raw.as_array().unwrap().len(), 1);
+        assert_eq!(raw[0]["source"], "twitter");
+        assert_eq!(raw[0]["site"], "twitter");
         assert_eq!(raw[0]["rank"], 1);
 
         let error = collect_recommended_with_plugins(
-            "example",
-            Some(1),
-            None,
+            "https://twitter.com/",
             &config,
             &logger,
             &catalog,
             &collector,
+            RecommendationOutput::Candidates,
         )
         .await
         .unwrap_err();
@@ -3147,45 +2875,26 @@ mod tests {
         );
     }
 
-    /// 検証: all の明示順序・plugin 無効化と既定の plugin ソート順を保つ
-    /// 理由: config で収集順序を再現可能にし、未指定時も決定的にするため
-    /// リスク: filesystem 列挙順や backend 種別で結果順が揺れる
     #[test]
-    fn plans_all_sources_with_deterministic_plugin_order_and_disable() {
-        let (_temp, catalog) = plugin_catalog(&[("zeta", &[]), ("alpha", &[])]);
-        let defaults = source_plans_for_all(None, &RecommendConfig::default(), &catalog).unwrap();
-        let default_names = defaults
-            .iter()
-            .map(|plan| plan.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            &default_names[default_names.len() - 2..],
-            &["alpha", "zeta"]
-        );
-
-        let mut config = RecommendConfig {
-            sources: Some(vec![
-                "zeta".to_string(),
-                "hackernews".to_string(),
-                "alpha".to_string(),
-            ]),
-            ..RecommendConfig::default()
+    fn resolves_configured_seed_url_to_installed_plugin_source() {
+        let (_temp, catalog) = plugin_catalog(&[("example", &[])]);
+        let config: RecommendConfig = toml::from_str(
+            r#"
+            [source.example]
+            seed_url = "https://example.com/news"
+            "#,
+        )
+        .unwrap();
+        let target =
+            resolve_recommendation_target("https://example.com/news", &config, &catalog).unwrap();
+        let RecommendationTarget::Plugin { source } = target else {
+            panic!("configured seed URL should resolve to the installed plugin");
         };
-        config.source.insert(
-            "hackernews".to_string(),
-            RecommendSiteConfig {
-                enabled: Some(false),
-                ..RecommendSiteConfig::default()
-            },
-        );
-        let plans = source_plans_for_all(None, &config, &catalog).unwrap();
-        assert_eq!(
-            plans
-                .iter()
-                .map(|plan| plan.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["zeta", "alpha"]
-        );
+        assert_eq!(source.name, "example");
+        assert!(matches!(
+            resolve_recommendation_target("https://example.com/other", &config, &catalog).unwrap(),
+            RecommendationTarget::PageLinks { .. }
+        ));
     }
 
     /// 検証: plugin の query と built-in の plugin options は起動前に拒否する
@@ -3194,20 +2903,21 @@ mod tests {
     #[test]
     fn rejects_backend_specific_unsupported_configuration() {
         let (_temp, catalog) = plugin_catalog(&[("example", &[])]);
-        let config = RecommendConfig::default();
+        let mut config = RecommendConfig::default();
+        config.source.insert(
+            "example".to_string(),
+            RecommendSiteConfig {
+                query: Some("rust".to_string()),
+                ..RecommendSiteConfig::default()
+            },
+        );
         assert!(
-            source_plan_for_plugin(
-                catalog.resolve("example").unwrap(),
-                None,
-                Some("rust"),
-                &config
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("--query")
+            source_plan_for_plugin(catalog.resolve("example").unwrap(), &config)
+                .unwrap_err()
+                .to_string()
+                .contains("Query configuration")
         );
 
-        let mut config = RecommendConfig::default();
         config.source.insert(
             "hackernews".to_string(),
             RecommendSiteConfig {
@@ -3216,43 +2926,20 @@ mod tests {
             },
         );
         assert!(
-            source_plans_for_all(None, &config, &catalog)
-                .unwrap_err()
-                .to_string()
-                .contains("options")
+            source_plan_for_parts(
+                "hackernews",
+                sites::hackernews::SITE.discovery.unwrap(),
+                &config
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("options")
         );
     }
 
-    /// 検証: plugin の明示失敗はエラー、all 中の失敗は他 source の成功を残す
-    /// 理由:明示実行は失敗を隠さず、batch は部分成功を利用できるようにするため
-    /// リスク: cron 全体が一 plugin で停止するか、明示失敗が成功扱いになる
-    #[tokio::test]
-    async fn handles_explicit_plugin_failure_and_all_partial_failure() {
-        let (_temp, catalog) = plugin_catalog(&[("alpha", &[]), ("beta", &[])]);
-        let collector = FakePluginCollector::failing("alpha");
-        let config = RecommendConfig {
-            sources: Some(vec!["alpha".to_string(), "beta".to_string()]),
-            ..RecommendConfig::default()
-        };
-        let (logger, _) = test_logger();
-
-        let source = catalog.resolve("alpha").unwrap();
-        let plan = source_plan_for_plugin(source, Some(1), None, &config).unwrap();
-        assert!(collect_source_plan(&plan, &collector).await.is_err());
-
-        let items =
-            collect_all_sources_with_logger(Some(1), &config, &logger, &catalog, &collector)
-                .await
-                .unwrap();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["source"], "beta");
-    }
-
-    /// 検証: Hacker News の site 名は topstories 収集として扱う
-    /// 理由: 長い HN item URL を毎回入力せずに recommend を実行できるようにする
-    /// リスク: site 名入力が使えずワンコマンド性が落ちる
+    /// 検証: Hacker News のホーム URL は topstories 収集として扱う
     #[test]
-    fn resolves_hackernews_site_name_as_topstories() {
+    fn resolves_hackernews_home_as_topstories() {
         let RecommendationTarget::BuiltIn {
             site_name,
             endpoint:
@@ -3260,7 +2947,12 @@ mod tests {
                     request: JsonRequest::FollowUpIds { .. },
                     ..
                 },
-        } = resolve_recommendation_target("hackernews", &PluginSourceCatalog::default()).unwrap()
+        } = resolve_recommendation_target(
+            "https://news.ycombinator.com/",
+            &RecommendConfig::default(),
+            &PluginSourceCatalog::default(),
+        )
+        .unwrap()
         else {
             panic!("hackernews should resolve to HN topstories");
         };
@@ -3281,6 +2973,7 @@ mod tests {
                 },
         } = resolve_recommendation_target(
             "https://news.ycombinator.com/item?id=123",
+            &RecommendConfig::default(),
             &PluginSourceCatalog::default(),
         )
         .unwrap()
@@ -3290,145 +2983,6 @@ mod tests {
         assert_eq!(site_name, "hackernews");
     }
 
-    /// 検証: Dev.to の site 名は Dev.to API 収集へ解決する
-    /// 理由: site 名だけで Dev.to の上位記事取得を開始できるようにする
-    /// リスク: Dev.to が汎用リンク抽出に落ち、記事以外のリンクが混ざる
-    #[test]
-    fn resolves_devto_site_name_to_articles_api() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint:
-                DiscoveryEndpoint::JsonApi {
-                    api_url,
-                    request: JsonRequest::PaginatedPerPage,
-                },
-        } = resolve_recommendation_target("devto", &PluginSourceCatalog::default()).unwrap()
-        else {
-            panic!("devto should resolve to Dev.to articles");
-        };
-        assert_eq!(site_name, "devto");
-        assert_eq!(api_url, "https://dev.to/api/articles?top=7");
-    }
-
-    /// 検証: Zenn の site 名はトレンド RSS 収集へ解決する
-    /// 理由: `recommend all` で Zenn の技術トレンドも取得したい
-    /// リスク: Zenn が generic link 抽出に落ち、記事推薦として正規化されない
-    #[test]
-    fn resolves_zenn_site_name_to_feed() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint: DiscoveryEndpoint::RssFeed { feed_url },
-        } = resolve_recommendation_target("zenn", &PluginSourceCatalog::default()).unwrap()
-        else {
-            panic!("zenn should resolve to Zenn feed");
-        };
-        assert_eq!(site_name, "zenn");
-        assert_eq!(feed_url, "https://zenn.dev/feed");
-    }
-
-    #[test]
-    fn rejects_twitter_without_installed_plugin() {
-        let error = resolve_recommendation_target("twitter", &PluginSourceCatalog::default())
-            .err()
-            .expect("twitter without plugin should fail");
-
-        assert!(error.to_string().contains("plugin"));
-    }
-
-    #[test]
-    fn resolves_qiita_site_name_to_items_search() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint:
-                DiscoveryEndpoint::SearchApi {
-                    api_url,
-                    default_query,
-                    request: SearchRequest::QiitaItems,
-                },
-        } = resolve_recommendation_target("qiita", &PluginSourceCatalog::default()).unwrap()
-        else {
-            panic!("qiita should resolve to Qiita items search");
-        };
-        assert_eq!(site_name, "qiita");
-        assert_eq!(api_url, "https://qiita.com/api/v2/items");
-        assert_eq!(default_query, Some("AI OR Rust OR security"));
-    }
-
-    #[test]
-    fn resolves_bluesky_site_name_to_search_posts() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint:
-                DiscoveryEndpoint::SearchApi {
-                    api_url,
-                    default_query,
-                    request: SearchRequest::BlueskySearchPosts,
-                },
-        } = resolve_recommendation_target("bluesky", &PluginSourceCatalog::default()).unwrap()
-        else {
-            panic!("bluesky should resolve to Bluesky searchPosts");
-        };
-        assert_eq!(site_name, "bluesky");
-        assert_eq!(
-            api_url,
-            "https://api.bsky.app/xrpc/app.bsky.feed.searchPosts"
-        );
-        assert_eq!(default_query, Some("AI OR Rust OR security"));
-    }
-
-    /// 検証: arXiv の site 名は既定 query の arXiv API 収集へ解決する
-    /// 理由: AI/ML/CV/NLP 系の新着論文を `recommend all` に含めたい
-    /// リスク: 論文 source が登録されず、既存の fetch/save 対応だけに留まる
-    #[test]
-    fn resolves_arxiv_site_name_to_default_search() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint:
-                DiscoveryEndpoint::SearchApi {
-                    api_url,
-                    default_query,
-                    request: SearchRequest::ArxivSearch,
-                },
-        } = resolve_recommendation_target("arxiv", &PluginSourceCatalog::default()).unwrap()
-        else {
-            panic!("arxiv should resolve to arXiv search");
-        };
-        assert_eq!(site_name, "arxiv");
-        assert_eq!(api_url, "https://export.arxiv.org/api/query");
-        let default_query = default_query.unwrap();
-        assert!(default_query.contains("cat:cs.CV"));
-        assert!(default_query.contains("cat:cs.LG"));
-        assert!(default_query.contains("stat.ML"));
-    }
-
-    #[test]
-    fn resolves_github_advisory_site_name_to_api() {
-        let RecommendationTarget::BuiltIn {
-            site_name,
-            endpoint:
-                DiscoveryEndpoint::JsonApi {
-                    api_url,
-                    request: JsonRequest::PaginatedPerPage,
-                },
-        } = resolve_recommendation_target("github-advisory", &PluginSourceCatalog::default())
-            .unwrap()
-        else {
-            panic!("github-advisory should resolve to GitHub Advisory API");
-        };
-        assert_eq!(site_name, "github-advisory");
-        assert_eq!(api_url, "https://api.github.com/advisories");
-    }
-
-    /// 検証: all は registry 上の全 recommend source 収集として扱う
-    /// 理由: 個別 site 名を列挙せずに一括収集と翻訳を開始できるようにする
-    /// リスク: all が未知 site として拒否され、バッチ用途で使えない
-    #[test]
-    fn resolves_all_keyword_to_all_sources() {
-        let target = resolve_recommendation_target("ALL", &PluginSourceCatalog::default()).unwrap();
-        assert!(matches!(target, RecommendationTarget::AllSources));
-        assert!(target.translation_required());
-    }
-
     /// 検証: HN 以外の http(s) URL は generic page link 抽出として扱う
     /// 理由: まずはページ内リンクをワンコマンドで収集する fallback を提供する
     /// リスク: 未対応サイトで何も収集できない
@@ -3436,47 +2990,13 @@ mod tests {
     fn resolves_other_urls_as_generic_links() {
         let RecommendationTarget::PageLinks { url } = resolve_recommendation_target(
             "https://example.com/article",
+            &RecommendConfig::default(),
             &PluginSourceCatalog::default(),
         )
         .unwrap() else {
             panic!("generic URL should resolve to page links");
         };
         assert_eq!(url, "https://example.com/article");
-    }
-
-    /// 検証: recommend source 未設定の site 名は明示的に拒否する
-    /// 理由: site 名だけで無根拠な collection URL を推測しない
-    /// リスク: YouTube 等で意図しないページからリンクを収集する
-    #[test]
-    fn rejects_site_names_without_recommend_source() {
-        assert!(resolve_recommendation_target("youtube", &PluginSourceCatalog::default()).is_err());
-    }
-
-    /// 検証: 未知の site 名は URL ではなく入力エラーとして扱う
-    /// 理由: typo を generic URL として扱わない
-    /// リスク: 誤入力が分かりにくいネットワークエラーになる
-    #[test]
-    fn rejects_unknown_site_names() {
-        assert!(
-            resolve_recommendation_target("unknown-site", &PluginSourceCatalog::default()).is_err()
-        );
-    }
-
-    /// 検証: all の source 数は recommend 可能な site 数と一致する
-    /// 理由: `--limit` は各 source ごとの上限として適用する
-    /// リスク: 最初の site だけで上限を使い切り、後続 site から取得されない
-    #[test]
-    fn counts_all_sources_from_site_registry() {
-        let config = RecommendConfig::default();
-        assert_eq!(
-            source_count_for_target("all", &config, &PluginSourceCatalog::default()).unwrap(),
-            sites::recommendable_sites().len()
-        );
-        assert_eq!(
-            source_count_for_target("hackernews", &config, &PluginSourceCatalog::default())
-                .unwrap(),
-            1
-        );
     }
 
     /// 検証: 新規推薦が 0 件なら明示的なエラーにする
@@ -3490,23 +3010,6 @@ mod tests {
             error.to_string(),
             "No new recommended articles found for all"
         );
-    }
-
-    #[test]
-    fn fetch_articles_seen_items_include_only_translated_artifacts() {
-        let translated = vec![json!({
-            "url": "https://example.com/translated",
-            "title": "Translated"
-        })];
-        let fetched_not_translated = vec![json!({
-            "url": "https://example.com/fetched",
-            "title": "Fetched"
-        })];
-
-        let seen = seen_items_for_fetch_articles(&translated, &fetched_not_translated);
-
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0]["url"], "https://example.com/translated");
     }
 
     #[test]
@@ -3665,36 +3168,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fetch_articles_requires_translated_items_when_agent_is_configured() {
-        let error = ensure_fetch_articles_success("all", true, 0).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "No recommended articles translated for all"
-        );
-    }
-
-    #[test]
-    fn fetch_articles_allows_json_only_when_translation_is_skipped() {
-        assert!(ensure_fetch_articles_success("all", false, 0).is_ok());
-    }
-
-    #[test]
-    fn create_pr_requires_fetch_articles() {
-        let config = RecommendConfig {
-            create_pr: true,
-            ..Default::default()
-        };
-
-        let error = validate_create_pr_config(&config).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "[recommend].create_pr requires [recommend].fetch_articles = true"
-        );
-    }
-
     /// 検証: 履歴 DB での重複排除前に候補 0 件なら既存のエラーにする
     /// 理由: source が候補を返さない失敗と、既読しかない失敗を区別する
     /// リスク: 候補 0 件でも SQLite を作成し、all-seen と同じエラーに見える
@@ -3711,12 +3184,11 @@ mod tests {
 
         let error = collect_recommended_with_plugins(
             &url,
-            Some(5),
-            None,
             &config,
             &logger,
             &catalog,
             &PluginRuntime,
+            RecommendationOutput::Candidates,
         )
         .await
         .unwrap_err();
@@ -3747,14 +3219,13 @@ mod tests {
         );
     }
 
-    /// 検証: all は source 別 config で arXiv query と source limit を上書きする
+    /// 検証: arXiv URL では source 別 config の query と limit を使う
     /// 理由: #news 用に arXiv の取得カテゴリだけを設定ファイルから調整したい
-    /// リスク: all 実行時に registry 既定 query しか使えず、LLM/RAG/agent 寄りの論文収集に寄せられない
+    /// リスク: registry 既定 query しか使えず、論文収集を調整できない
     #[test]
-    fn all_source_plans_apply_arxiv_config_query_and_source_limit() {
+    fn arxiv_url_uses_source_config_query_and_limit() {
         let config = RecommendConfig {
             limit: Some(30),
-            sources: Some(vec!["arxiv".to_string()]),
             source: BTreeMap::from([(
                 "arxiv".to_string(),
                 RecommendSiteConfig {
@@ -3766,42 +3237,23 @@ mod tests {
             ..Default::default()
         };
 
-        let plans = source_plans_for_all(None, &config, &PluginSourceCatalog::default()).unwrap();
-
-        assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].name, "arxiv");
-        assert_eq!(plans[0].limit, 10);
-        assert_eq!(plans[0].query.as_deref(), Some("cat:cs.IR OR cat:cs.SE"));
-    }
-
-    /// 検証: all は config の source 順序を使い、enabled=false の source を除外する
-    /// 理由: cron 用の all 実行で収集対象を設定ファイル側から安定して制御したい
-    /// リスク: 不要 source を止められず、翻訳対象が増えたり外部 API failure に巻き込まれる
-    #[test]
-    fn all_source_plans_use_config_source_order_and_skip_disabled_sources() {
-        let config = RecommendConfig {
-            sources: Some(vec![
-                "zenn".to_string(),
-                "hackernews".to_string(),
-                "devto".to_string(),
-            ]),
-            source: BTreeMap::from([(
-                "devto".to_string(),
-                RecommendSiteConfig {
-                    enabled: Some(false),
-                    ..Default::default()
-                },
-            )]),
-            ..Default::default()
+        let RecommendationTarget::BuiltIn {
+            site_name,
+            endpoint,
+        } = resolve_recommendation_target(
+            "https://export.arxiv.org/api/query",
+            &config,
+            &PluginSourceCatalog::default(),
+        )
+        .unwrap()
+        else {
+            panic!("arXiv URL should resolve to its search adapter");
         };
+        let plan = source_plan_for_parts(site_name, endpoint, &config).unwrap();
 
-        let plans = source_plans_for_all(None, &config, &PluginSourceCatalog::default()).unwrap();
-        let names = plans
-            .iter()
-            .map(|plan| plan.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(names, vec!["zenn", "hackernews"]);
+        assert_eq!(plan.name, "arxiv");
+        assert_eq!(plan.limit, 10);
+        assert_eq!(plan.query.as_deref(), Some("cat:cs.IR OR cat:cs.SE"));
     }
 
     #[test]
@@ -3828,42 +3280,6 @@ mod tests {
         assert_eq!(tasks[1].stem, "002-hackernews-same-title");
         assert_eq!(tasks[0].title, "Same Title");
         assert_eq!(tasks[1].title, "Same Title");
-    }
-
-    #[test]
-    fn qiita_and_bluesky_source_plans_use_config_query_and_limit() {
-        let config = RecommendConfig {
-            sources: Some(vec!["qiita".to_string(), "bluesky".to_string()]),
-            source: BTreeMap::from([
-                (
-                    "qiita".to_string(),
-                    RecommendSiteConfig {
-                        limit: Some(6),
-                        query: Some("Rust tag:rust".to_string()),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "bluesky".to_string(),
-                    RecommendSiteConfig {
-                        limit: Some(8),
-                        query: Some("atproto rust".to_string()),
-                        ..Default::default()
-                    },
-                ),
-            ]),
-            ..Default::default()
-        };
-
-        let plans = source_plans_for_all(None, &config, &PluginSourceCatalog::default()).unwrap();
-
-        assert_eq!(plans.len(), 2);
-        assert_eq!(plans[0].name, "qiita");
-        assert_eq!(plans[0].limit, 6);
-        assert_eq!(plans[0].query.as_deref(), Some("Rust tag:rust"));
-        assert_eq!(plans[1].name, "bluesky");
-        assert_eq!(plans[1].limit, 8);
-        assert_eq!(plans[1].query.as_deref(), Some("atproto rust"));
     }
 
     #[test]
@@ -4016,64 +3432,35 @@ mod tests {
         assert!(error.to_string().contains("429"));
     }
 
-    /// 検証: arXiv 単体実行では CLI 指定が config より優先される
-    /// 理由: 一時的な手動収集では config を編集せず query/limit を上書きしたい
-    /// リスク: CLI で明示した query が config に隠れて、意図と違うカテゴリを取得する
     #[test]
-    fn direct_arxiv_plan_prefers_cli_query_and_limit_over_config() {
+    fn direct_rate_limited_sources_use_low_code_defaults() {
+        let config = RecommendConfig::default();
+
+        for site in [&sites::nvd::SITE, &sites::github_search::SITE] {
+            let plan = source_plan_for_parts(site.name, site.discovery.unwrap(), &config).unwrap();
+            assert_eq!(plan.limit, 10);
+        }
+    }
+
+    #[test]
+    fn logs_source_collection_events_with_structured_fields() {
         let config = RecommendConfig {
-            limit: Some(30),
             source: BTreeMap::from([(
-                "arxiv".to_string(),
+                "arxiv".into(),
                 RecommendSiteConfig {
-                    limit: Some(10),
-                    query: Some("cat:cs.IR".to_string()),
+                    limit: Some(3),
+                    query: Some("cat:cs.SE".into()),
                     ..Default::default()
                 },
             )]),
             ..Default::default()
         };
-        let site = sites::site_by_name("arxiv").unwrap();
-
-        let plan = source_plan_for_site(site, Some(5), Some("cat:cs.SE"), &config).unwrap();
-
-        assert_eq!(plan.name, "arxiv");
-        assert_eq!(plan.limit, 5);
-        assert_eq!(plan.query.as_deref(), Some("cat:cs.SE"));
-    }
-
-    #[test]
-    fn direct_rate_limited_sources_use_low_code_defaults() {
-        let config = RecommendConfig::default();
-
-        let nvd =
-            source_plan_for_site(sites::site_by_name("nvd").unwrap(), None, None, &config).unwrap();
-        let github_search = source_plan_for_site(
-            sites::site_by_name("github-search").unwrap(),
-            None,
-            None,
-            &config,
-        )
-        .unwrap();
-
-        assert_eq!(nvd.limit, 10);
-        assert_eq!(github_search.limit, 10);
-    }
-
-    #[test]
-    fn logs_source_collection_events_with_structured_fields() {
-        let config = RecommendConfig::default();
-        let arxiv = source_plan_for_site(
-            sites::site_by_name("arxiv").unwrap(),
-            Some(3),
-            Some("cat:cs.SE"),
-            &config,
-        )
-        .unwrap();
+        let arxiv =
+            source_plan_for_parts("arxiv", sites::arxiv::SITE.discovery.unwrap(), &config).unwrap();
         let (logger, logs) = test_logger();
 
         log_source_collection_start(&logger, &arxiv);
-        log_source_collection_complete(&logger, &arxiv, 3, 12);
+        log_source_collection_complete(&logger, &arxiv, 3);
 
         let logs = logs.lock().unwrap().clone();
         assert_eq!(logs[0].message, "recommend_source_start");
@@ -4083,62 +3470,6 @@ mod tests {
         assert_eq!(logs[1].message, "recommend_source_complete");
         assert_eq!(logs[1].fields["source"], "arxiv");
         assert_eq!(logs[1].fields["item_count"], "3");
-        assert_eq!(logs[1].fields["total_item_count"], "12");
-    }
-
-    #[test]
-    fn logs_source_counts_summary_with_structured_fields() {
-        let items = vec![
-            json!({"site": "hackernews", "url": "https://example.com/1"}),
-            json!({"site": "devto", "url": "https://example.com/2"}),
-            json!({"site": "hackernews", "url": "https://example.com/3"}),
-            json!({"source": "legacy-source", "url": "https://example.com/4"}),
-            json!({"url": "https://example.com/5"}),
-        ];
-        let (logger, logs) = test_logger();
-
-        log_source_counts_summary(&logger, "recommend_new_items_by_source", &items);
-
-        let logs = logs.lock().unwrap().clone();
-        assert_eq!(logs[0].message, "recommend_new_items_by_source");
-        assert_eq!(
-            logs[0].fields["source_counts"],
-            "hackernews=2, devto=1, legacy-source=1, unknown=1"
-        );
-        assert_eq!(logs[0].fields["source_count"], "4");
-        assert_eq!(logs[0].fields["item_count"], "5");
-    }
-
-    #[test]
-    fn source_collection_failure_is_logged_without_dropping_successful_items() {
-        let config = RecommendConfig::default();
-        let plan =
-            source_plan_for_site(sites::site_by_name("nvd").unwrap(), Some(5), None, &config)
-                .unwrap();
-        let (logger, logs) = test_logger();
-        let mut items = vec![json!({
-            "site": "hackernews",
-            "url": "https://example.com/success"
-        })];
-        let mut failures = Vec::new();
-
-        handle_source_collection_result(
-            &logger,
-            &plan,
-            Err(anyhow::anyhow!(
-                "HTTP status server error (503 Service Unavailable)"
-            )),
-            &mut items,
-            &mut failures,
-        );
-
-        assert_eq!(items.len(), 1);
-        assert_eq!(failures.len(), 1);
-        let logs = logs.lock().unwrap().clone();
-        assert_eq!(logs[0].message, "recommend_source_failed");
-        assert_eq!(logs[0].fields["source"], "nvd");
-        assert_eq!(logs[0].fields["limit"], "5");
-        assert!(logs[0].fields["error"].contains("503 Service Unavailable"));
     }
 
     /// 検証: limit は 1 以上 100 以下だけ許可する
@@ -4181,7 +3512,7 @@ mod tests {
     }
 
     /// 検証: Dev.to API item から記事推薦項目へ変換する
-    /// 理由: `recommend devto` と `recommend all` で Dev.to の記事 API レスポンスを raw.json に正規化する
+    /// 理由: Dev.to の探索 API レスポンスを raw.json に正規化する
     /// リスク: Dev.to から記事 URL を取得しても翻訳対象の content が空になる
     #[test]
     fn converts_devto_article_to_recommendation() {
@@ -4754,42 +4085,5 @@ mod tests {
                 std::process::id()
             ))
             .join("recommended_articles")
-    }
-
-    /// 検証: registry に登録された全 recommend source から実際に記事を取得できる
-    /// 理由: `recommend all` は全 site の外部 API / ページ構造に依存するため、単体変換だけでは壊れた取得経路を検出できない
-    /// リスク: ある site の source が壊れても all 実行まで気づけない
-    #[tokio::test]
-    #[ignore = "requires live network access and can be rate limited by remote services"]
-    async fn collects_recommendations_from_every_registered_site() {
-        let config = RecommendConfig::default();
-        let logger = Logger::root(slog::Discard, slog::o!());
-        let items = collect_all_sources_with_logger(
-            Some(1),
-            &config,
-            &logger,
-            &PluginSourceCatalog::default(),
-            &PluginRuntime,
-        )
-        .await
-        .unwrap();
-        let collected_sites = items
-            .iter()
-            .filter_map(|item| item.get("site").and_then(Value::as_str))
-            .collect::<HashSet<_>>();
-
-        for site in sites::recommendable_sites() {
-            assert!(
-                collected_sites.contains(site.name),
-                "missing recommendations from {}",
-                site.name
-            );
-        }
-
-        assert!(items.iter().all(|item| {
-            item.get("url")
-                .and_then(Value::as_str)
-                .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
-        }));
     }
 }

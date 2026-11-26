@@ -29,7 +29,7 @@ sequenceDiagram
     participant Plugin
     participant Pipeline
 
-    User->>Core: recommend target or config
+    User->>Core: article collect URL --discover
     Core->>Catalog: resolve shared source namespace
     Catalog-->>Core: source owner and signed manifest
 
@@ -51,21 +51,17 @@ sequenceDiagram
 
     alt source succeeds
         Core->>Core: assign source / site / rank
-        Core->>Pipeline: history / fetch / translation / save / PR
+        Core->>Pipeline: history and processing through the requested stage
         Pipeline-->>User: recommendation result
     else source collection fails after preflight
-        alt recommend all
-            Core->>Core: record source failure
-            Core->>Catalog: continue with next enabled source
-        else explicit source target
-            Core-->>User: command failure
-        end
+        Core-->>User: command failure
     end
 ```
 
-`[recommend].sources` が未指定なら core内の built-in source registry 順、その後に
-installed plugin catalogのsource名順で実行する。明示 list がある場合は built-in と
-plugin を混在でき、その順序を保つ。
+登録済みの URL に対応する discovery source を解決する。X の source は
+`article-collector article collect https://x.com/ --discover` で利用する。
+他のプラグインは `[recommend.source.<name>].seed_url` で正式な source 名と HTTP(S) の
+起点 URL を対応づける。組み込み探索と公式 X プラグインの既定 URL が優先される。
 
 plugin source の設定は `options` 配下へ隔離する。現行 X plugin の設定例は次の
 とおりである。
@@ -193,12 +189,12 @@ Active -- update --> Staging
 ```
 
 source catalogはsigned installed manifestだけから構築し、executableの存在確認は
-実行直前まで遅延する。欠損executableは該当plugin sourceだけのfailureとなり、
-`recommend all`では無関係なbuilt-in sourceを停止しない。
+実行直前まで遅延する。executable が欠損している場合、その plugin source の実行時に
+エラーを返す。
 
 図の最後の分岐は、source planの事前検証が成功した後のcollection/runtime failureを
 表す。unknown source、plugin optionsのJSON Schema違反、built-in/plugin namespaceの
-衝突などのpreflight errorは、`recommend all`でもcommand failureとして返す。
+衝突などの preflight error は、コマンドの失敗として返す。
 
 ## 配布・運用ドキュメント
 

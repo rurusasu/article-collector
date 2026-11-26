@@ -1,26 +1,5 @@
 [recommend]
-sources = [
-  "hackernews",
-  "devto",
-  "zenn",
-  "qiita",
-  "bluesky",
-  "arxiv",
-  "github-advisory",
-  "cisa-kev",
-  "nvd",
-  "aws-whatsnew",
-  "aws-security",
-  "google-cloud-blog",
-  "kubernetes",
-  "cncf",
-  "infoq",
-  "martinfowler",
-  "github-search",
-]
 limit = 30
-fetch_articles = false
-create_pr = false
 # history_path = "D:/article-collector-data/recommend-history.sqlite"
 
 [recommend.source.arxiv]
@@ -54,10 +33,3 @@ limit = 5
 [recommend.source.github-search]
 limit = 5
 query = "stars:>1000 pushed:>2026-01-01 archived:false"
-
-# Installed plugin source example:
-# [recommend.source.example]
-# limit = 10
-#
-# [recommend.source.example.options]
-# mode = "latest"

@@ -37,13 +37,10 @@ CLI / config
   -> pipeline/pr.rs
 ```
 
-plugin 未使用時の `recommend` command は target 解決後に
-`discovery/planner.rs` と pipeline を呼び出す。
-
-installed plugin がある場合、`recommend` は built-in site と plugin manifest の
-source/alias を 1 つの namespace として解決する。built-in は従来どおり
-`discovery/planner.rs`、plugin は `plugins/sources.rs` と
-`plugins/runtime.rs` を通り、どちらも同じ history 以降の pipeline に合流する。
+`article collect` は記事 URL から本文を取得し、`--through` で指定した段階まで処理する。
+`--discover` を指定すると、起点 URL から built-in site、plugin source、または Web ページの
+リンクを解決する。built-in は `discovery/planner.rs`、plugin は `plugins/sources.rs` と
+`plugins/runtime.rs` を通り、候補の重複除外と記事処理に合流する。
 
 ```text
 CLI / config
@@ -61,14 +58,14 @@ CLI / config
 | `src/sites/<site>.rs` | site 名、alias、URL rule、discovery endpoint 設定、candidate parser、site 固有 article API adapter。 | `src/sites/registry.rs`、`src/discovery/planner.rs`、`src/discovery/endpoints/*.rs`、`src/fetch/routes/site_article_api.rs`。 |
 | `src/sites/registry.rs` | 全 site の一覧と site lookup。 | CLI target 解決、`src/discovery/planner.rs`、URL classification、save type 判定。 |
 | `src/sites/types.rs` | `Site`、`UrlRule`、`DiscoveryEndpoint`、`FetchRoute`、`SaveType` などの共有型。 | `sites/`、`discovery/`、`fetch/`、`save.rs`。 |
-| `src/discovery/planner.rs` | target と config から discovery 実行計画を作る。 | `recommend` command、将来の article pipeline command。 |
+| `src/discovery/planner.rs` | URL に対応する discovery endpoint を解決する。 | `article collect --discover`。 |
 | `src/discovery/endpoints/*.rs` | RSS、Atom、JSON API、search API、catalog API、page links など機構別の取得処理。 | `src/discovery/planner.rs` から呼ばれ、必要に応じて `sites/<site>.rs` の parser に payload を渡す。 |
 | `src/fetch/router.rs` | URL または candidate から fetch route を選ぶ。 | pipeline の article fetch fan-out。 |
 | `src/fetch/routes/*.rs` | generic web、social status、video transcript、site article API など機構別の単一記事 fetch。 | `src/fetch/router.rs` から呼ばれる。 |
 | `src/save.rs` | fetch 済み content の Markdown 保存分類。 | pipeline の保存処理。 |
 | `src/pipeline/*.rs` | history、artifact、translation、PR 作成など discovery/fetch 後の処理。 | CLI command。 |
 | `src/plugins/registry.rs` / `installer.rs` / `state.rs` | registry trust、artifact 検証、atomic active state。 | `plugin install/update/list/uninstall`。 |
-| `src/plugins/runtime.rs` / `sources.rs` | MCP lifecycle、runtime descriptor 照合、dynamic source candidate 正規化。 | `recommend`、`plugin configure/doctor`。 |
+| `src/plugins/runtime.rs` / `sources.rs` | MCP lifecycle、runtime descriptor 照合、dynamic source candidate 正規化。 | `article collect --discover`、`plugin configure/doctor`。 |
 | `src/x_connector/` | X OAuth、token store、hosted MCP client、plugin-side stdio server。 | `src/bin/article-collector-x.rs` から起動され、core の `src/plugins/runtime.rs` と MCP stdio で接続する。 |
 
 ## site 固有処理の流し方
@@ -91,7 +88,7 @@ site 固有の処理は、必ず `src/sites/<site>.rs` を起点にする。
 | URL match を変える | `src/sites/<site>.rs` | 対象の `docs/sites/<site>.md`。 |
 | discovery endpoint を増やす | `src/sites/types.rs`、`src/discovery/endpoints/` | [enums.md](enums.md)、[files.md](files.md)、対象の site doc。 |
 | fetch route を増やす | `src/sites/types.rs`、`src/fetch/routes/` | [enums.md](enums.md)、[files.md](files.md)、対象の site doc。 |
-| `recommend` の config 規約を変える | `src/config.rs`、CLI command | [enums.md](enums.md)、README、必要なら site docs。 |
+| 探索の config 規約を変える | `src/config.rs`、`article collect --discover` | [enums.md](enums.md)、README、必要なら site docs。 |
 | pipeline の順序を変える | `src/pipeline/` | この [usage.md](usage.md)。 |
 | plugin lifecycle を変える | `src/plugins/` | [../plugins/README.md](../plugins/README.md)、README。 |
 | plugin 配布を変える | `.github/workflows/`、registry publisher | [../plugins/distribution.md](../plugins/distribution.md)、[../ci-cd/README.md](../ci-cd/README.md)、README。 |

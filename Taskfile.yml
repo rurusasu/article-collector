@@ -7,60 +7,26 @@ tasks:
       - task --list
 
   collect:
-    desc: "Rust CLI で 記事取得 -> 翻訳 -> 保存 -> PR を実行"
+    desc: "Rust CLI で記事を収集（DISCOVER=true、THROUGH=raw|translate|pr を指定可能）"
     requires:
       vars: [URL]
-    preconditions:
-      - sh: command -v cargo
-        msg: "cargo is required"
-      - sh: command -v git
-        msg: "git is required"
-      - sh: command -v gh
-        msg: "gh CLI is required for save-and-pr"
-    cmds:
-      - cargo run --locked -- collect "{{.URL}}"
-
-  fetch:
-    desc: "Rust CLI で URL から記事を取得"
-    requires:
-      vars: [URL]
+    env:
+      ARTICLE_COLLECTOR_TASK_URL: "{{.URL}}"
+      ARTICLE_COLLECTOR_TASK_DISCOVER: "{{.DISCOVER}}"
+      ARTICLE_COLLECTOR_TASK_THROUGH: "{{.THROUGH}}"
     preconditions:
       - sh: command -v cargo
         msg: "cargo is required"
     cmds:
-      - cargo run --locked -- fetch "{{.URL}}"
-
-  recommend:
-    desc: "Rust CLI で site 名/all/起点 URL からレコメンド/関連リンクを取得"
-    requires:
-      vars: [TARGET]
-    preconditions:
-      - sh: command -v cargo
-        msg: "cargo is required"
-    cmds:
-      - cargo run --locked -- recommend "{{.TARGET}}" {{if .LIMIT}}--limit {{.LIMIT}}{{end}} {{if .QUERY}}--query "{{.QUERY}}"{{end}} {{if .CONFIG}}--config "{{.CONFIG}}"{{end}}
-
-  translate:
-    desc: "Rust CLI で取得済み JSON を翻訳"
-    preconditions:
-      - sh: command -v cargo
-        msg: "cargo is required"
-    cmds:
-      - cargo run --locked -- translate {{if .INPUT}}"{{.INPUT}}"{{end}}
-
-  save-and-pr:
-    desc: "Rust CLI で翻訳記事を保存して PR 作成"
-    requires:
-      vars: [URL]
-    preconditions:
-      - sh: command -v cargo
-        msg: "cargo is required"
-      - sh: command -v git
-        msg: "git is required"
-      - sh: command -v gh
-        msg: "gh CLI is required"
-    cmds:
-      - cargo run --locked -- save-and-pr "{{.URL}}"
+      - |
+        set -- "$ARTICLE_COLLECTOR_TASK_URL"
+        if [ "$ARTICLE_COLLECTOR_TASK_DISCOVER" = true ]; then
+          set -- "$@" --discover
+        fi
+        if [ -n "$ARTICLE_COLLECTOR_TASK_THROUGH" ]; then
+          set -- "$@" --through "$ARTICLE_COLLECTOR_TASK_THROUGH"
+        fi
+        cargo run --locked --bin article-collector -- article collect "$@"
 
   install:
     desc: "ローカル checkout から article-collector をインストール"
